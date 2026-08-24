@@ -1,0 +1,34 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1787330139879,
+      "tag": "0000_condemned_rattler",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787336556244,
+      "tag": "0001_task6_fix1",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787337908061,
+      "tag": "0002_task7_external_adapter_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1787338389209,
+      "tag": "0003_task8_claim_idempotency",
+      "breakpoints": true
+    }
+  ]
+}
