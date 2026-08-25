@@ -15,7 +15,7 @@ vi.mock("@/server/assistant/realtime", () => ({
   createRealtimeCall,
 }));
 
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
 function realtimeRequest({
   body = "v=0\r\na=offer\r\n",
@@ -131,5 +131,66 @@ describe("POST /api/assistant/realtime", () => {
     expect(payload).toEqual({ error: "Realtime voice is temporarily unavailable. Text chat remains available." });
     expect(JSON.stringify(payload)).not.toContain("route-secret-token");
     expect(JSON.stringify(payload)).not.toContain("sensitive upstream");
+  });
+});
+
+describe("GET /api/assistant/realtime", () => {
+  it("authenticates before refreshing grounded instructions", async () => {
+    const { AuthenticationError } = await import("@/server/auth/session");
+    requireCurrentRun.mockRejectedValue(new AuthenticationError());
+
+    const response = await GET(new Request("http://localhost/api/assistant/realtime?route=%2Fclaims"));
+
+    expect(response.status).toBe(401);
+    expect(buildRealtimeSessionConfig).not.toHaveBeenCalled();
+    expect(createRealtimeCall).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "claims",
+    "https://evil.example/claims",
+    "//evil.example/claims",
+    "/\\evil.example/claims",
+    "/claims%0Anext",
+  ])("applies the SDP route validation contract to context refreshes for %j", async (route) => {
+    const response = await GET(new Request(
+      `http://localhost/api/assistant/realtime?route=${encodeURIComponent(route)}`,
+    ));
+
+    expect(response.status).toBe(422);
+    expect(buildRealtimeSessionConfig).not.toHaveBeenCalled();
+  });
+
+  it("returns only fresh complete instructions from the shared masked projection", async () => {
+    const instructions = [
+      "You are EPF Sahayak. Never invent member facts or perform actions without explicit confirmation.",
+      "Respond only in English or Hindi and write Hindi in Devanagari.",
+      "Current masked portal context (synthetic data only):",
+      JSON.stringify({
+        route: "/claims",
+        screen: { name: "Final settlement", purpose: "Check claim readiness", officialTerm: "Form 19" },
+        member: { profile: { uanMasked: "XXXX XXXX 7890" } },
+        findings: [{ code: "MISSING_EXIT_DATE" }],
+        activeProcess: { key: "FINAL_CLAIM" },
+        recentConversation: [{ role: "member", text: "Can I claim?" }],
+      }),
+    ].join("\n\n");
+    buildRealtimeSessionConfig.mockResolvedValue({
+      type: "realtime",
+      model: "gpt-realtime-2.1-mini",
+      instructions,
+      serverSecret: "must-not-cross-boundary",
+    });
+
+    const response = await GET(new Request("http://localhost/api/assistant/realtime?route=%2Fclaims"));
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(payload).toEqual({ instructions });
+    expect(JSON.stringify(payload)).not.toContain("serverSecret");
+    expect(JSON.stringify(payload)).not.toContain("must-not-cross-boundary");
+    expect(buildRealtimeSessionConfig).toHaveBeenCalledWith({ demoRunId: "run-1", route: "/claims" });
+    expect(createRealtimeCall).not.toHaveBeenCalled();
   });
 });

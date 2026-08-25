@@ -12,10 +12,13 @@ describe("Realtime assistant session configuration", () => {
   let testDatabase: IsolatedTestDatabase;
   let demoRunId: string;
   let previousRealtimeModel: string | undefined;
+  let previousRealtimeTranscribeModel: string | undefined;
 
   beforeEach(async () => {
     previousRealtimeModel = process.env.OPENAI_REALTIME_MODEL;
+    previousRealtimeTranscribeModel = process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL;
     delete process.env.OPENAI_REALTIME_MODEL;
+    delete process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL;
     testDatabase = await createIsolatedTestDatabase();
     await seedAllDemoUsers();
     const [user] = await getDb()
@@ -28,6 +31,8 @@ describe("Realtime assistant session configuration", () => {
   afterEach(async () => {
     if (previousRealtimeModel === undefined) delete process.env.OPENAI_REALTIME_MODEL;
     else process.env.OPENAI_REALTIME_MODEL = previousRealtimeModel;
+    if (previousRealtimeTranscribeModel === undefined) delete process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL;
+    else process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL = previousRealtimeTranscribeModel;
     await testDatabase.cleanup();
   });
 
@@ -40,7 +45,10 @@ describe("Realtime assistant session configuration", () => {
       output_modalities: ["audio"],
       audio: {
         input: {
-          transcription: { model: "gpt-4o-mini-transcribe" },
+          transcription: {
+            model: "gpt-transcribe",
+            prompt: expect.stringMatching(/English.*Latin.*Hindi.*Devanagari/i),
+          },
           turn_detection: {
             type: "server_vad",
             create_response: true,
@@ -50,6 +58,13 @@ describe("Realtime assistant session configuration", () => {
         output: { voice: "coral" },
       },
     });
+
+    const transcription = (config.audio as {
+      input: { transcription: Record<string, unknown> };
+    }).input.transcription;
+    expect(transcription).not.toHaveProperty("language");
+    expect(transcription.prompt).toMatch(/never.*(?:Urdu|Arabic)/i);
+    expect(transcription.prompt).toMatch(/EPF|UAN|KYC|passbook|claim/i);
   });
 
   it("grounds bilingual instructions in masked screen context only", async () => {
@@ -111,6 +126,17 @@ describe("Realtime assistant session configuration", () => {
     const config = await buildRealtimeSessionConfig({ demoRunId, route: "/overview" });
 
     expect(config.model).toBe("gpt-realtime-2.1");
+  });
+
+  it("uses the dedicated Realtime transcription model override", async () => {
+    process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL = "custom-realtime-transcribe";
+
+    const config = await buildRealtimeSessionConfig({ demoRunId, route: "/overview" });
+    const transcription = (config.audio as {
+      input: { transcription: Record<string, unknown> };
+    }).input.transcription;
+
+    expect(transcription.model).toBe("custom-realtime-transcribe");
   });
 });
 

@@ -9,14 +9,29 @@ export type AssistantVoiceState = "CONNECTING" | "LISTENING" | "SPEAKING" | "REC
 export type AssistantVoiceCaption = { role: "member" | "assistant"; text: string };
 
 const UNSUPPORTED_SCRIPT_NOTICE = "Speech received in an unsupported script. Please speak in English or Hindi.";
+const VOICE_RECEIVED_NOTICE = "Voice received. आवाज़ मिली।";
+const SETUP_TIMEOUT_MS = 15_000;
 const IDLE_SESSION_MS = 10 * 60 * 1_000;
 const MAX_SESSION_MS = 30 * 60 * 1_000;
+
+type CaptionRole = AssistantVoiceCaption["role"];
 
 type RealtimeEvent = {
   type?: unknown;
   delta?: unknown;
   transcript?: unknown;
   item_id?: unknown;
+  previous_item_id?: unknown;
+  item?: unknown;
+};
+
+type CaptionItem = {
+  id: string;
+  role: CaptionRole | null;
+  text: string;
+  completed: boolean;
+  previousItemId?: string | null;
+  firstSeen: number;
 };
 
 type VoiceResources = {
@@ -26,45 +41,115 @@ type VoiceResources = {
   remoteStream: MediaStream | null;
   audio: HTMLAudioElement;
   negotiation: AbortController;
+  contextRefresh: AbortController | null;
 };
 
-function safeCaption(text: string): string {
-  return containsForbiddenScript(text) ? UNSUPPORTED_SCRIPT_NOTICE : text;
+function safeCaption(text: string, role: CaptionRole): string {
+  if (!containsForbiddenScript(text)) return text;
+  return role === "member" ? VOICE_RECEIVED_NOTICE : UNSUPPORTED_SCRIPT_NOTICE;
 }
 
-function appendCaption(current: string, delta: string): string {
-  if (current === UNSUPPORTED_SCRIPT_NOTICE) return current;
-  return safeCaption(`${current}${delta}`);
+function appendCaption(current: string, delta: string, role: CaptionRole): string {
+  if (current === UNSUPPORTED_SCRIPT_NOTICE || current === VOICE_RECEIVED_NOTICE) return current;
+  return safeCaption(`${current}${delta}`, role);
 }
 
 function isPermissionDenied(error: unknown): boolean {
   return error instanceof DOMException && error.name === "NotAllowedError";
 }
 
-export function useAssistantVoice({ active, route }: { active: boolean; route: string }) {
+function isCompleteRealtimeInstructions(value: unknown): value is string {
+  return typeof value === "string"
+    && value.includes("Current masked portal context (synthetic data only):")
+    && /English or Hindi/i.test(value)
+    && /Never invent/i.test(value)
+    && /explicit confirmation/i.test(value);
+}
+
+function contextKey(route: string, contextVersion: string): string {
+  return JSON.stringify([route, contextVersion]);
+}
+
+function roleFromRealtimeItem(item: unknown): CaptionRole | null {
+  if (typeof item !== "object" || item === null) return null;
+  const role = (item as Record<string, unknown>).role;
+  if (role === "user") return "member";
+  if (role === "assistant") return "assistant";
+  return null;
+}
+
+function idFromRealtimeItem(item: unknown): string {
+  if (typeof item !== "object" || item === null) return "";
+  const id = (item as Record<string, unknown>).id;
+  return typeof id === "string" ? id : "";
+}
+
+function orderCaptionItems(items: CaptionItem[]): CaptionItem[] {
+  const remaining = [...items].sort((left, right) => left.firstSeen - right.firstSeen);
+  const allIds = new Set(remaining.map(({ id }) => id));
+  const placedIds = new Set<string>();
+  const ordered: CaptionItem[] = [];
+
+  while (remaining.length > 0) {
+    const readyIndex = remaining.findIndex(({ previousItemId }) => (
+      previousItemId === undefined
+      || previousItemId === null
+      || !allIds.has(previousItemId)
+      || placedIds.has(previousItemId)
+    ));
+    const [next] = remaining.splice(readyIndex >= 0 ? readyIndex : 0, 1);
+    if (!next) break;
+    ordered.push(next);
+    placedIds.add(next.id);
+  }
+
+  return ordered;
+}
+
+export function useAssistantVoice({
+  active,
+  contextVersion,
+  route,
+}: {
+  active: boolean;
+  contextVersion: string;
+  route: string;
+}) {
   const [state, setState] = useState<AssistantVoiceState>("IDLE");
   const [transcript, setTranscript] = useState("");
   const [answer, setAnswer] = useState("");
-  const [completedCaptions, setCompletedCaptions] = useState<AssistantVoiceCaption[]>([]);
+  const [captionItems, setCaptionItems] = useState<CaptionItem[]>([]);
   const [error, setError] = useState("");
   const activeRef = useRef(active);
   const routeRef = useRef(route);
-  const negotiatedRouteRef = useRef("");
+  const contextVersionRef = useRef(contextVersion);
+  const appliedContextKeyRef = useRef("");
   const resourcesRef = useRef<VoiceResources | null>(null);
   const generationRef = useRef(0);
   const reconnectUsedRef = useRef(false);
   const connectRef = useRef<(reconnecting: boolean) => void>(() => undefined);
   const inputItemRef = useRef("");
   const outputItemRef = useRef("");
+  const captionSequenceRef = useRef(0);
+  const fallbackItemSequenceRef = useRef(0);
+  const captionStoreRef = useRef(new Map<string, CaptionItem>());
+  const contextRefreshSequenceRef = useRef(0);
+  const setupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const totalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const clearSetupTimer = useCallback(() => {
+    if (setupTimerRef.current) clearTimeout(setupTimerRef.current);
+    setupTimerRef.current = null;
+  }, []);
+
   const clearTimers = useCallback(() => {
+    clearSetupTimer();
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     if (totalTimerRef.current) clearTimeout(totalTimerRef.current);
     idleTimerRef.current = null;
     totalTimerRef.current = null;
-  }, []);
+  }, [clearSetupTimer]);
 
   const closeResources = useCallback(() => {
     const resources = resourcesRef.current;
@@ -72,6 +157,7 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
     if (!resources) return;
 
     resources.negotiation.abort();
+    resources.contextRefresh?.abort();
     resources.channel.onopen = null;
     resources.channel.onmessage = null;
     resources.channel.onerror = null;
@@ -113,42 +199,87 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
     return true;
   }, [resetIdleTimer]);
 
+  const publishCaptions = useCallback(() => {
+    const ordered = orderCaptionItems([...captionStoreRef.current.values()]);
+    const latestMember = [...ordered].reverse().find(({ role }) => role === "member");
+    const latestAssistant = [...ordered].reverse().find(({ role }) => role === "assistant");
+    setCaptionItems(ordered.map((item) => ({ ...item })));
+    setTranscript(latestMember?.text ?? "");
+    setAnswer(latestAssistant?.text ?? "");
+  }, []);
+
+  const upsertCaptionItem = useCallback((id: string, role: CaptionRole | null): CaptionItem => {
+    const current = captionStoreRef.current.get(id);
+    if (current) {
+      if (role) current.role = role;
+      return current;
+    }
+    const created: CaptionItem = {
+      id,
+      role,
+      text: "",
+      completed: false,
+      firstSeen: captionSequenceRef.current,
+    };
+    captionSequenceRef.current += 1;
+    captionStoreRef.current.set(id, created);
+    return created;
+  }, []);
+
+  const eventItemId = useCallback((event: RealtimeEvent, role: CaptionRole): string => {
+    const supplied = typeof event.item_id === "string" ? event.item_id : "";
+    const current = role === "member" ? inputItemRef : outputItemRef;
+    if (supplied) current.current = supplied;
+    if (current.current) return current.current;
+    fallbackItemSequenceRef.current += 1;
+    current.current = `${role}-fallback-${fallbackItemSequenceRef.current}`;
+    return current.current;
+  }, []);
+
   const handleRealtimeEvent = useCallback((event: RealtimeEvent) => {
     if (!activeRef.current || typeof event.type !== "string") return;
     resetIdleTimer();
 
-    const itemId = typeof event.item_id === "string" ? event.item_id : "";
     switch (event.type) {
+      case "conversation.item.created": {
+        const id = idFromRealtimeItem(event.item);
+        if (!id) return;
+        const item = upsertCaptionItem(id, roleFromRealtimeItem(event.item));
+        if (typeof event.previous_item_id === "string") item.previousItemId = event.previous_item_id;
+        else if (event.previous_item_id === null) item.previousItemId = null;
+        publishCaptions();
+        break;
+      }
       case "conversation.item.input_audio_transcription.delta": {
         if (typeof event.delta !== "string") return;
-        const isNewItem = Boolean(itemId) && itemId !== inputItemRef.current;
-        if (itemId) inputItemRef.current = itemId;
-        setTranscript((current) => isNewItem ? safeCaption(event.delta as string) : appendCaption(current, event.delta as string));
+        const item = upsertCaptionItem(eventItemId(event, "member"), "member");
+        if (!item.completed) item.text = appendCaption(item.text, event.delta, "member");
+        publishCaptions();
         break;
       }
-      case "conversation.item.input_audio_transcription.completed":
-        if (itemId) inputItemRef.current = itemId;
-        if (typeof event.transcript === "string") {
-          const completedTranscript = safeCaption(event.transcript);
-          setTranscript(completedTranscript);
-          if (completedTranscript.trim()) setCompletedCaptions((current) => [...current, { role: "member", text: completedTranscript }]);
-        }
+      case "conversation.item.input_audio_transcription.completed": {
+        if (typeof event.transcript !== "string") return;
+        const item = upsertCaptionItem(eventItemId(event, "member"), "member");
+        item.text = safeCaption(event.transcript, "member");
+        item.completed = true;
+        publishCaptions();
         break;
+      }
       case "response.output_audio_transcript.delta": {
         if (typeof event.delta !== "string") return;
-        const isNewItem = Boolean(itemId) && itemId !== outputItemRef.current;
-        if (itemId) outputItemRef.current = itemId;
-        setAnswer((current) => isNewItem ? safeCaption(event.delta as string) : appendCaption(current, event.delta as string));
+        const item = upsertCaptionItem(eventItemId(event, "assistant"), "assistant");
+        if (!item.completed) item.text = appendCaption(item.text, event.delta, "assistant");
+        publishCaptions();
         break;
       }
-      case "response.output_audio_transcript.done":
-        if (itemId) outputItemRef.current = itemId;
-        if (typeof event.transcript === "string") {
-          const completedAnswer = safeCaption(event.transcript);
-          setAnswer(completedAnswer);
-          if (completedAnswer.trim()) setCompletedCaptions((current) => [...current, { role: "assistant", text: completedAnswer }]);
-        }
+      case "response.output_audio_transcript.done": {
+        if (typeof event.transcript !== "string") return;
+        const item = upsertCaptionItem(eventItemId(event, "assistant"), "assistant");
+        item.text = safeCaption(event.transcript, "assistant");
+        item.completed = true;
+        publishCaptions();
         break;
+      }
       case "output_audio_buffer.started":
         setState("SPEAKING");
         break;
@@ -156,7 +287,7 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
         setState("LISTENING");
         break;
       case "input_audio_buffer.speech_started":
-        inputItemRef.current = "";
+        inputItemRef.current = typeof event.item_id === "string" ? event.item_id : "";
         setTranscript("");
         setState("LISTENING");
         break;
@@ -166,7 +297,49 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
       default:
         break;
     }
-  }, [fail, resetIdleTimer]);
+  }, [eventItemId, fail, publishCaptions, resetIdleTimer, upsertCaptionItem]);
+
+  const refreshContext = useCallback(async (nextRoute: string, nextContextKey: string) => {
+    const resources = resourcesRef.current;
+    if (!resources || resources.channel.readyState !== "open") return;
+
+    resources.contextRefresh?.abort();
+    const controller = new AbortController();
+    resources.contextRefresh = controller;
+    const refreshSequence = contextRefreshSequenceRef.current + 1;
+    contextRefreshSequenceRef.current = refreshSequence;
+    const generation = generationRef.current;
+
+    try {
+      const response = await fetch(`/api/assistant/realtime?route=${encodeURIComponent(nextRoute)}`, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        signal: controller.signal,
+      });
+      if (response.status === 401) throw new Error("AUTHENTICATION_REQUIRED");
+      if (!response.ok) return;
+      const body = await response.json() as Record<string, unknown>;
+      if (
+        controller.signal.aborted
+        || refreshSequence !== contextRefreshSequenceRef.current
+        || generation !== generationRef.current
+        || resourcesRef.current !== resources
+        || !isCompleteRealtimeInstructions(body.instructions)
+      ) return;
+
+      if (sendClientEvent({
+        type: "session.update",
+        session: { type: "realtime", instructions: body.instructions },
+      })) appliedContextKeyRef.current = nextContextKey;
+    } catch (caught) {
+      if (controller.signal.aborted || refreshSequence !== contextRefreshSequenceRef.current) return;
+      if (caught instanceof Error && caught.message === "AUTHENTICATION_REQUIRED") {
+        fail("Voice session could not authenticate. Please sign in again or use text chat.");
+      }
+    } finally {
+      if (resources.contextRefresh === controller) resources.contextRefresh = null;
+    }
+  }, [fail, sendClientEvent]);
 
   const startTotalTimer = useCallback(() => {
     if (totalTimerRef.current) clearTimeout(totalTimerRef.current);
@@ -181,12 +354,19 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
     const generation = generationRef.current + 1;
     generationRef.current = generation;
     closeResources();
+    clearSetupTimer();
+    appliedContextKeyRef.current = "";
     if (!reconnecting) {
       reconnectUsedRef.current = false;
       clearTimers();
       setTranscript("");
       setAnswer("");
-      setCompletedCaptions([]);
+      setCaptionItems([]);
+      captionStoreRef.current.clear();
+      captionSequenceRef.current = 0;
+      fallbackItemSequenceRef.current = 0;
+      inputItemRef.current = "";
+      outputItemRef.current = "";
       startTotalTimer();
     }
     setError("");
@@ -197,13 +377,19 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
       return;
     }
 
+    setupTimerRef.current = setTimeout(() => {
+      if (!activeRef.current || generation !== generationRef.current) return;
+      fail("Voice connection did not finish within 15 seconds. Open text chat or retry voice.");
+    }, SETUP_TIMEOUT_MS);
+
     let microphone: MediaStream | null = null;
     let peer: RTCPeerConnection | null = null;
     let channel: RTCDataChannel | null = null;
     let audio: HTMLAudioElement | null = null;
     let negotiation: AbortController | null = null;
+    let resourcesRegistered = false;
     const closeUnregisteredResources = () => {
-      if (resourcesRef.current?.microphone === microphone) return;
+      if (resourcesRegistered) return;
 
       negotiation?.abort();
       if (channel) {
@@ -224,6 +410,7 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
         audio.srcObject = null;
       }
     };
+
     try {
       microphone = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (!activeRef.current || generation !== generationRef.current) {
@@ -243,10 +430,13 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
         remoteStream: null,
         audio,
         negotiation,
+        contextRefresh: null,
       };
       resourcesRef.current = resources;
+      resourcesRegistered = true;
       const registeredPeer = peer;
       const registeredAudio = audio;
+      const registeredChannel = channel;
 
       microphone.getTracks().forEach((track) => registeredPeer.addTrack(track, microphone as MediaStream));
 
@@ -270,7 +460,7 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
       registeredPeer.onconnectionstatechange = () => {
         if (registeredPeer.connectionState === "failed" || registeredPeer.connectionState === "disconnected") requestReconnect();
       };
-      channel.onmessage = (message) => {
+      registeredChannel.onmessage = (message) => {
         if (generation !== generationRef.current || typeof message.data !== "string") return;
         try {
           handleRealtimeEvent(JSON.parse(message.data) as RealtimeEvent);
@@ -278,29 +468,25 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
           fail("Realtime voice sent an unreadable update. Retry voice or use text chat.");
         }
       };
-      channel.onerror = requestReconnect;
-      channel.onclose = requestReconnect;
-      channel.onopen = () => {
+      registeredChannel.onerror = requestReconnect;
+      registeredChannel.onclose = requestReconnect;
+      registeredChannel.onopen = () => {
         if (!activeRef.current || generation !== generationRef.current) return;
+        clearSetupTimer();
         setState("LISTENING");
         resetIdleTimer();
-        if (routeRef.current !== negotiatedRouteRef.current) {
-          const currentRoute = routeRef.current;
-          if (sendClientEvent({
-            type: "session.update",
-            session: {
-              type: "realtime",
-              instructions: `The member is now viewing portal route ${currentRoute}. Keep responses grounded in this screen.`,
-            },
-          })) negotiatedRouteRef.current = currentRoute;
+        const currentKey = contextKey(routeRef.current, contextVersionRef.current);
+        if (currentKey !== appliedContextKeyRef.current) {
+          void refreshContext(routeRef.current, currentKey);
         }
       };
 
-      const offer = await peer.createOffer();
-      await peer.setLocalDescription(offer);
+      const offer = await registeredPeer.createOffer();
+      await registeredPeer.setLocalDescription(offer);
       const offerSdp = offer.sdp?.trim();
       if (!offerSdp) throw new Error("EMPTY_OFFER");
       const negotiatedRoute = routeRef.current;
+      const negotiatedContextKey = contextKey(negotiatedRoute, contextVersionRef.current);
       const response = await fetch(`/api/assistant/realtime?route=${encodeURIComponent(negotiatedRoute)}`, {
         method: "POST",
         headers: { "content-type": "application/sdp" },
@@ -311,13 +497,11 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
       const answerSdp = await response.text();
       if (!answerSdp.trim()) throw new Error("EMPTY_ANSWER");
       if (!activeRef.current || generation !== generationRef.current) return;
-      await peer.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: answerSdp }));
-      negotiatedRouteRef.current = negotiatedRoute;
+      await registeredPeer.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: answerSdp }));
+      if (!appliedContextKeyRef.current) appliedContextKeyRef.current = negotiatedContextKey;
     } catch (caught) {
       closeUnregisteredResources();
-      if (!activeRef.current || generation !== generationRef.current) {
-        return;
-      }
+      if (!activeRef.current || generation !== generationRef.current) return;
       if (isPermissionDenied(caught)) {
         fail("Microphone permission was denied. Allow it in your browser settings, then retry.");
       } else if (caught instanceof Error && caught.message === "AUTHENTICATION_REQUIRED") {
@@ -328,7 +512,16 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
         fail("Realtime voice could not connect. Retry voice or use text chat.");
       }
     }
-  }, [clearTimers, closeResources, fail, handleRealtimeEvent, resetIdleTimer, sendClientEvent, startTotalTimer]);
+  }, [
+    clearSetupTimer,
+    clearTimers,
+    closeResources,
+    fail,
+    handleRealtimeEvent,
+    refreshContext,
+    resetIdleTimer,
+    startTotalTimer,
+  ]);
 
   connectRef.current = (reconnecting) => {
     void connect(reconnecting);
@@ -358,15 +551,11 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
 
   useEffect(() => {
     routeRef.current = route;
-    if (!active || route === negotiatedRouteRef.current) return;
-    if (sendClientEvent({
-      type: "session.update",
-      session: {
-        type: "realtime",
-        instructions: `The member is now viewing portal route ${route}. Keep responses grounded in this screen.`,
-      },
-    })) negotiatedRouteRef.current = route;
-  }, [active, route, sendClientEvent]);
+    contextVersionRef.current = contextVersion;
+    const nextContextKey = contextKey(route, contextVersion);
+    if (!active || nextContextKey === appliedContextKeyRef.current) return;
+    void refreshContext(route, nextContextKey);
+  }, [active, contextVersion, refreshContext, route]);
 
   useEffect(() => {
     activeRef.current = active;
@@ -394,11 +583,29 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
     };
   }, [active, clearTimers, closeResources, connect]);
 
+  const completedCaptions = captionItems.flatMap((item) => (
+    item.completed && item.role && item.text.trim()
+      ? [{ role: item.role, text: item.text }]
+      : []
+  ));
+  const latestMemberId = [...captionItems].reverse().find(({ role }) => role === "member")?.id;
+  const latestAssistantId = [...captionItems].reverse().find(({ role }) => role === "assistant")?.id;
+  const handoffCaptions = captionItems.flatMap((item) => {
+    const isVisiblePartial = !item.completed && (
+      (item.role === "member" && item.id === latestMemberId)
+      || (item.role === "assistant" && item.id === latestAssistantId)
+    );
+    return (item.completed || isVisiblePartial) && item.role && item.text.trim()
+      ? [{ role: item.role, text: item.text }]
+      : [];
+  });
+
   return {
     state: active ? state : "IDLE" as AssistantVoiceState,
     transcript,
     answer,
     completedCaptions,
+    handoffCaptions,
     error,
     startListening: start,
     stopListening: stop,

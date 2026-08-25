@@ -18,14 +18,15 @@ const statusLabel: Record<AssistantVoiceState, string> = {
 
 type AssistantVoiceControlProps = {
   active: boolean;
+  contextVersion: string;
   route: string;
   onExit(): void;
   onReturnToText(captions: AssistantVoiceCaption[]): void;
 };
 
 export function AssistantVoiceControl(props: AssistantVoiceControlProps) {
-  const { active, onExit, onReturnToText, route } = props;
-  const voice = useAssistantVoice({ active, route });
+  const { active, contextVersion, onExit, onReturnToText, route } = props;
+  const voice = useAssistantVoice({ active, contextVersion, route });
   const isSpeaking = voice.state === "SPEAKING";
 
   function exit() {
@@ -35,7 +36,7 @@ export function AssistantVoiceControl(props: AssistantVoiceControlProps) {
 
   function returnToText() {
     voice.stop();
-    onReturnToText(voice.completedCaptions);
+    onReturnToText(voice.handoffCaptions);
   }
 
   return (

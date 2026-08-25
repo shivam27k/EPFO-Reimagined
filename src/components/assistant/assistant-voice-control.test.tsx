@@ -106,6 +106,19 @@ const getUserMedia = vi.fn();
 const localTracks: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
 const remoteTrack = { stop: vi.fn() };
 const remoteStream = { getTracks: () => [remoteTrack] } as unknown as MediaStream;
+const fullClaimsInstructions = [
+  "You are EPF Sahayak. Never invent member facts and require explicit confirmation for actions.",
+  "Respond only in English or Hindi. Write Hindi in Devanagari and never Urdu or Arabic script.",
+  "Current masked portal context (synthetic data only):",
+  JSON.stringify({
+    route: "/claims",
+    screen: { name: "Final settlement", purpose: "Check claim readiness", officialTerm: "Form 19" },
+    member: { profile: { uanMasked: "XXXX XXXX 7890" } },
+    findings: [{ code: "MISSING_EXIT_DATE" }],
+    activeProcess: { key: "FINAL_CLAIM" },
+    recentConversation: [{ role: "member", text: "Can I claim?" }],
+  }),
+].join("\n\n");
 
 function createMicrophoneStream() {
   const track = { stop: vi.fn() };
@@ -117,6 +130,7 @@ function createMicrophoneStream() {
 function renderControl(overrides: Partial<React.ComponentProps<typeof AssistantVoiceControl>> = {}) {
   const props = {
     active: true,
+    contextVersion: "snapshot-v1",
     route: "/overview",
     onExit: vi.fn(),
     onReturnToText: vi.fn(),
@@ -170,10 +184,13 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
     FakeRemoteAudio.instances = [];
     localTracks.length = 0;
     remoteTrack.stop.mockReset();
-    fetchMock.mockReset().mockImplementation(async () => new Response("answer-sdp", {
-      status: 200,
-      headers: { "content-type": "application/sdp" },
-    }));
+    fetchMock.mockReset().mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "GET") return Response.json({ instructions: fullClaimsInstructions });
+      return new Response("answer-sdp", {
+        status: 200,
+        headers: { "content-type": "application/sdp" },
+      });
+    });
     getUserMedia.mockReset().mockImplementation(async () => createMicrophoneStream());
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("RTCPeerConnection", FakePeerConnection);
@@ -240,21 +257,33 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
       channel.receive({ type: "response.output_audio_transcript.done", item_id: "assistant-1", transcript: "سلام" });
     });
 
+    expect(caption).toHaveTextContent("Voice received. आवाज़ मिली।");
     expect(caption).toHaveTextContent("Speech received in an unsupported script. Please speak in English or Hindi.");
     expect(caption).not.toHaveTextContent("میرا پاس بک");
     expect(caption).not.toHaveTextContent("سلام");
+    expect(within(caption).queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("returns every completed caption to text chat without a REST submission", async () => {
+  it("returns out-of-order completions in conversation item order", async () => {
     const onReturnToText = vi.fn();
     const { channel } = await beginRealtimeSession({ onReturnToText });
 
     act(() => {
-      channel.receive({ type: "conversation.item.input_audio_transcription.completed", item_id: "member-1", transcript: "मेरा passbook" });
-      channel.receive({ type: "response.output_audio_transcript.done", item_id: "assistant-1", transcript: "आपका passbook तैयार है" });
-      channel.receive({ type: "conversation.item.input_audio_transcription.completed", item_id: "member-2", transcript: "What next?" });
+      channel.receive({ type: "conversation.item.created", previous_item_id: "member-2", item: { id: "assistant-2", role: "assistant" } });
+      channel.receive({ type: "conversation.item.created", previous_item_id: null, item: { id: "member-1", role: "user" } });
+      channel.receive({ type: "conversation.item.created", previous_item_id: "assistant-1", item: { id: "member-2", role: "user" } });
+      channel.receive({ type: "conversation.item.created", previous_item_id: "member-1", item: { id: "assistant-1", role: "assistant" } });
       channel.receive({ type: "response.output_audio_transcript.done", item_id: "assistant-2", transcript: "Review your contributions." });
+      channel.receive({ type: "conversation.item.input_audio_transcription.completed", item_id: "member-2", transcript: "What next?" });
+      channel.receive({ type: "response.output_audio_transcript.done", item_id: "assistant-1", transcript: "आपका passbook तैयार है" });
+      channel.receive({ type: "conversation.item.input_audio_transcription.completed", item_id: "member-1", transcript: "मेरा passbook" });
     });
+
+    const liveCaption = screen.getByRole("group", { name: "Voice caption" });
+    expect(liveCaption).toHaveTextContent("What next?");
+    expect(liveCaption).toHaveTextContent("Review your contributions.");
+    expect(liveCaption).not.toHaveTextContent("मेरा passbook");
+    expect(liveCaption).not.toHaveTextContent("आपका passbook तैयार है");
     fireEvent.click(screen.getByRole("button", { name: "Open text chat" }));
 
     expect(onReturnToText).toHaveBeenCalledWith([
@@ -264,6 +293,30 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
       { role: "assistant", text: "Review your contributions." },
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands off completed captions and visible partial items exactly once", async () => {
+    const onReturnToText = vi.fn();
+    const { channel } = await beginRealtimeSession({ onReturnToText });
+
+    act(() => {
+      channel.receive({ type: "conversation.item.created", previous_item_id: null, item: { id: "member-1", role: "user" } });
+      channel.receive({ type: "conversation.item.created", previous_item_id: "member-1", item: { id: "assistant-1", role: "assistant" } });
+      channel.receive({ type: "conversation.item.created", previous_item_id: "assistant-1", item: { id: "member-2", role: "user" } });
+      channel.receive({ type: "conversation.item.input_audio_transcription.delta", item_id: "member-1", delta: "Show my passbook" });
+      channel.receive({ type: "conversation.item.input_audio_transcription.completed", item_id: "member-1", transcript: "Show my passbook" });
+      channel.receive({ type: "response.output_audio_transcript.delta", item_id: "assistant-1", delta: "Your posted balance is " });
+      channel.receive({ type: "response.output_audio_transcript.delta", item_id: "assistant-1", delta: "visible." });
+      channel.receive({ type: "conversation.item.input_audio_transcription.delta", item_id: "member-2", delta: "Which month?" });
+      channel.receive({ type: "conversation.item.input_audio_transcription.completed", item_id: "member-1", transcript: "Show my passbook" });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open text chat" }));
+
+    expect(onReturnToText).toHaveBeenCalledWith([
+      { role: "member", text: "Show my passbook" },
+      { role: "assistant", text: "Your posted balance is visible." },
+      { role: "member", text: "Which month?" },
+    ]);
   });
 
   it("maps streamed audio lifecycle events and allows speech or a control to interrupt output", async () => {
@@ -288,21 +341,79 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Listening");
   });
 
-  it("sends a compact session update when the portal pathname changes", async () => {
+  it("fetches and sends complete fresh instructions when the pathname changes", async () => {
     const { channel, props, rerender } = await beginRealtimeSession();
     expect(channel.send).not.toHaveBeenCalled();
 
     rerender(<AssistantVoiceControl {...props} route="/claims" />);
 
     await waitFor(() => expect(channel.send).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith("/api/assistant/realtime?route=%2Fclaims", {
+      method: "GET",
+      headers: { accept: "application/json" },
+      signal: expect.any(AbortSignal),
+    });
     expect(sentEvents(channel)).toEqual([{
       type: "session.update",
       session: {
         type: "realtime",
-        instructions: "The member is now viewing portal route /claims. Keep responses grounded in this screen.",
+        instructions: fullClaimsInstructions,
       },
     }]);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String((sentEvents(channel)[0]?.session as Record<string, unknown>).instructions)).toContain("Final settlement");
+    expect(String((sentEvents(channel)[0]?.session as Record<string, unknown>).instructions)).toContain("explicit confirmation");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes complete instructions when the member snapshot changes on the same pathname", async () => {
+    const updatedInstructions = fullClaimsInstructions.replace("MISSING_EXIT_DATE", "EXIT_DATE_RECORDED");
+    const { channel, props, rerender } = await beginRealtimeSession({ route: "/claims" });
+    fetchMock.mockResolvedValueOnce(Response.json({ instructions: updatedInstructions }));
+
+    rerender(<AssistantVoiceControl {...props} contextVersion="snapshot-v2" route="/claims" />);
+
+    await waitFor(() => expect(channel.send).toHaveBeenCalledTimes(1));
+    expect(sentEvents(channel)).toEqual([{
+      type: "session.update",
+      session: { type: "realtime", instructions: updatedInstructions },
+    }]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores stale context responses that complete after a newer refresh", async () => {
+    let resolveOlder: ((response: Response) => void) | undefined;
+    let resolveNewer: ((response: Response) => void) | undefined;
+    const older = new Promise<Response>((resolve) => { resolveOlder = resolve; });
+    const newer = new Promise<Response>((resolve) => { resolveNewer = resolve; });
+    const { channel, props, rerender } = await beginRealtimeSession();
+    fetchMock.mockImplementationOnce(() => older).mockImplementationOnce(() => newer);
+
+    rerender(<AssistantVoiceControl {...props} contextVersion="snapshot-v2" route="/claims" />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    rerender(<AssistantVoiceControl {...props} contextVersion="snapshot-v3" route="/passbook" />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+    const newestInstructions = fullClaimsInstructions.replaceAll("claims", "passbook").replace("Final settlement", "Contributions and passbook");
+    resolveNewer?.(Response.json({ instructions: newestInstructions }));
+    await waitFor(() => expect(channel.send).toHaveBeenCalledTimes(1));
+    resolveOlder?.(Response.json({ instructions: fullClaimsInstructions }));
+    await act(async () => { await older; });
+
+    expect(sentEvents(channel)).toEqual([{
+      type: "session.update",
+      session: { type: "realtime", instructions: newestInstructions },
+    }]);
+  });
+
+  it("keeps the last complete context when a refresh fails", async () => {
+    const { channel, props, rerender } = await beginRealtimeSession();
+    fetchMock.mockResolvedValueOnce(Response.json({ error: "unavailable" }, { status: 503 }));
+
+    rerender(<AssistantVoiceControl {...props} route="/claims" />);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent("Listening");
   });
 
   it("uses one fresh SDP reconnect and exposes text fallback after the second peer failure", async () => {
@@ -343,6 +454,24 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
     expect(localTracks[0]?.stop).toHaveBeenCalledTimes(1);
     expect(FakePeerConnection.instances[0]?.close).toHaveBeenCalledTimes(1);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds connection setup at fifteen seconds and cleans partial resources", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation((_input: RequestInfo | URL, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+    }));
+    renderControl();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const peer = FakePeerConnection.instances[0]!;
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("15 seconds");
+    expect(screen.getByRole("button", { name: "Open text chat" })).toBeEnabled();
+    expect(localTracks[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(peer.channel.close).toHaveBeenCalledTimes(1);
+    expect(peer.close).toHaveBeenCalledTimes(1);
   });
 
   it("closes local and remote tracks, data channel, audio, and peer on exit", async () => {

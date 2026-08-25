@@ -12,6 +12,7 @@ type VoiceCaption = {
 
 type VoiceControlProps = {
   active: boolean;
+  contextVersion: string;
   route: string;
   onExit(): void;
   onReturnToText(captions: VoiceCaption[]): void;
@@ -30,7 +31,7 @@ vi.mock("./assistant-voice-control", () => ({
     voiceHarness.props = props;
     if (!props.active) return null;
     return (
-      <section aria-label="EPF Sahayak voice mode" data-route={props.route}>
+      <section aria-label="EPF Sahayak voice mode" data-context-version={props.contextVersion} data-route={props.route}>
         <p>मेरा passbook</p>
         <p>आपका passbook तैयार है</p>
         <button
@@ -109,6 +110,26 @@ describe("AssistantPanel voice integration", () => {
     expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBe(voiceHud);
     expect(voiceHud).toHaveAttribute("data-route", "/passbook");
     expect(voiceHarness.props?.route).toBe("/passbook");
+  });
+
+  test("changes the voice grounding version when router refresh supplies new member state", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    const firstSnapshot = snapshot();
+    const { rerender } = render(<AssistantPanel snapshot={firstSnapshot} />);
+    await screen.findByText("Ask about this page, a status, or the safest next action.");
+    openVoiceMode();
+    const voiceHud = screen.getByRole("region", { name: "EPF Sahayak voice mode" });
+    const firstVersion = voiceHarness.props?.contextVersion;
+
+    rerender(<AssistantPanel snapshot={{
+      ...firstSnapshot,
+      profile: { ...firstSnapshot.profile, onboardingComplete: true },
+      nextAction: { label: "Review contributions", href: "/passbook" },
+    }} />);
+
+    expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBe(voiceHud);
+    expect(voiceHarness.props?.route).toBe("/claims");
+    expect(voiceHarness.props?.contextVersion).not.toBe(firstVersion);
   });
 
   test("moves visible voice captions into text chat without submitting them", async () => {

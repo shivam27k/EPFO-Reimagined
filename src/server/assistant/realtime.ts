@@ -6,7 +6,12 @@ import { assistantInstructions } from "./instructions";
 
 const REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini";
-const DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+const DEFAULT_TRANSCRIPTION_MODEL = "gpt-transcribe";
+const REALTIME_TRANSCRIPTION_PROMPT = [
+  "Transcribe code-switched English and Hindi speech only.",
+  "Write English in Latin script and Hindi in Devanagari; never use Urdu or Arabic script.",
+  "EPF terms include EPF, EPS, EPFO, UAN, KYC, Aadhaar, passbook, contribution, employer, claim, Form 19, Form 31, Form 10C, Form 10D, and Annexure K.",
+].join(" ");
 const REALTIME_CONFIGURATION_ERROR = "Realtime voice service is not configured.";
 const REALTIME_NEGOTIATION_ERROR = "Realtime call negotiation failed.";
 
@@ -129,7 +134,8 @@ export async function buildRealtimeSessionConfig({
       input: {
         noise_reduction: { type: "near_field" },
         transcription: {
-          model: process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || DEFAULT_TRANSCRIPTION_MODEL,
+          model: process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL?.trim() || DEFAULT_TRANSCRIPTION_MODEL,
+          prompt: REALTIME_TRANSCRIPTION_PROMPT,
         },
         turn_detection: {
           type: "server_vad",

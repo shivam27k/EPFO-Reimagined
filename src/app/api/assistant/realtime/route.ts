@@ -40,6 +40,45 @@ function isSameOriginPathname(route: string): boolean {
     && !parsed.hash;
 }
 
+function readRealtimeRoute(request: Request): string | null {
+  const route = new URL(request.url).searchParams.get("route")?.trim();
+  if (!route || route.length > MAX_ROUTE_LENGTH || !isSameOriginPathname(route)) return null;
+  return route;
+}
+
+function routeValidationError() {
+  return Response.json({ error: "Use a valid portal route." }, { status: 422 });
+}
+
+function routeFailure(error: unknown) {
+  if (error instanceof AuthenticationError) {
+    return Response.json({ error: "Authentication required." }, { status: 401 });
+  }
+  return Response.json(
+    { error: "Realtime voice is temporarily unavailable. Text chat remains available." },
+    { status: 503 },
+  );
+}
+
+export async function GET(request: Request) {
+  try {
+    const current = await requireCurrentRun();
+    const route = readRealtimeRoute(request);
+    if (!route) return routeValidationError();
+
+    const config = await buildRealtimeSessionConfig({ demoRunId: current.demoRun.id, route });
+    if (typeof config.instructions !== "string" || !config.instructions.trim()) {
+      throw new Error("Realtime instructions are unavailable.");
+    }
+    return Response.json(
+      { instructions: config.instructions },
+      { headers: { "cache-control": "no-store" } },
+    );
+  } catch (error) {
+    return routeFailure(error);
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const current = await requireCurrentRun();
@@ -52,10 +91,8 @@ export async function POST(request: Request) {
       return Response.json({ error: "The WebRTC offer is too large." }, { status: 413 });
     }
 
-    const route = new URL(request.url).searchParams.get("route")?.trim();
-    if (!route || route.length > MAX_ROUTE_LENGTH || !isSameOriginPathname(route)) {
-      return Response.json({ error: "Use a valid portal route." }, { status: 422 });
-    }
+    const route = readRealtimeRoute(request);
+    if (!route) return routeValidationError();
 
     const sdp = await request.text();
     if (!sdp.trim()) {
@@ -74,12 +111,6 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    if (error instanceof AuthenticationError) {
-      return Response.json({ error: "Authentication required." }, { status: 401 });
-    }
-    return Response.json(
-      { error: "Realtime voice is temporarily unavailable. Text chat remains available." },
-      { status: 503 },
-    );
+    return routeFailure(error);
   }
 }
