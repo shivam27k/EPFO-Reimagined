@@ -113,7 +113,6 @@ export async function respondToMember({
         recentConversation: context.recentConversation,
         allowedProposalTypes: context.allowedActions,
       }),
-      max_output_tokens: 350,
       store: false,
       safety_identifier: createHash("sha256").update(demoRunId).digest("hex").slice(0, 64),
     });

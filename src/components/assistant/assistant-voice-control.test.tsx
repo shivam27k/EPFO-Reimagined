@@ -264,6 +264,20 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
     expect(within(caption).queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("keeps the live caption scrolled to the newest generated text", async () => {
+    const { channel } = await beginRealtimeSession();
+    const caption = screen.getByRole("group", { name: "Voice caption" });
+    Object.defineProperty(caption, "scrollHeight", { configurable: true, value: 480 });
+    caption.scrollTop = 0;
+
+    act(() => {
+      channel.receive({ type: "conversation.item.input_audio_transcription.delta", item_id: "member-1", delta: "What is on this screen?" });
+      channel.receive({ type: "response.output_audio_transcript.delta", item_id: "assistant-1", delta: "This is your employment page." });
+    });
+
+    expect(caption.scrollTop).toBe(480);
+  });
+
   it("returns out-of-order completions in conversation item order", async () => {
     const onReturnToText = vi.fn();
     const { channel } = await beginRealtimeSession({ onReturnToText });

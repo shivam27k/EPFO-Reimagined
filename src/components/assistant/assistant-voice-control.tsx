@@ -1,6 +1,7 @@
 "use client";
 
 import { Mic } from "lucide-react";
+import { useEffect, useRef } from "react";
 
 import { SafeBilingualText } from "./assistant-language";
 import { useAssistantVoice, type AssistantVoiceCaption, type AssistantVoiceState } from "./use-assistant-voice";
@@ -27,7 +28,13 @@ type AssistantVoiceControlProps = {
 export function AssistantVoiceControl(props: AssistantVoiceControlProps) {
   const { active, contextVersion, onExit, onReturnToText, route } = props;
   const voice = useAssistantVoice({ active, contextVersion, route });
+  const captionRef = useRef<HTMLDivElement>(null);
   const isSpeaking = voice.state === "SPEAKING";
+
+  useEffect(() => {
+    const caption = captionRef.current;
+    if (caption) caption.scrollTop = caption.scrollHeight;
+  }, [voice.answer, voice.error, voice.transcript]);
 
   function exit() {
     voice.stop();
@@ -48,7 +55,7 @@ export function AssistantVoiceControl(props: AssistantVoiceControlProps) {
         <div aria-label="EPF Sahayak microphone" className="assistant-voice-orb" role="img"><Mic aria-hidden="true" size={30} /></div>
         <strong aria-live="polite" className="assistant-voice-status" role="status">{statusLabel[voice.state]}</strong>
       </div>
-      <div aria-label="Voice caption" className="assistant-voice-caption" role="group">
+      <div aria-label="Voice caption" className="assistant-voice-caption" ref={captionRef} role="group">
         {!voice.transcript && !voice.answer && !voice.error ? <p>Speak naturally about this page. You can interrupt while EPF Sahayak is speaking.</p> : null}
         {voice.transcript ? <p><strong>You said:</strong> <SafeBilingualText text={voice.transcript} /></p> : null}
         {voice.answer ? <p><strong>EPF Sahayak:</strong> <SafeBilingualText text={voice.answer} /></p> : null}

@@ -82,6 +82,10 @@ describe("Realtime assistant session configuration", () => {
     expect(instructions).toMatch(/different from the current page.*answer/i);
     expect(instructions).toMatch(/any Hindi.*entire response.*Hindi.*Devanagari/i);
     expect(instructions).toMatch(/do not begin.*English/i);
+    expect(instructions).toMatch(/minimum sufficient answer/i);
+    expect(instructions).toMatch(/expand.*question.*requires/i);
+    expect(instructions).toMatch(/do not add.*UMANG.*background/i);
+    expect(instructions).not.toMatch(/maximum|hard limit|never exceed/i);
   });
 
   it("treats sanitized currently rendered page text as authoritative over stale metadata", async () => {
