@@ -1,3 +1,6 @@
+import "server-only";
+
+import { sanitizeMemberMessage } from "./assistant-store";
 import { buildAssistantContext } from "./context";
 import { assistantInstructions } from "./instructions";
 
@@ -6,6 +9,28 @@ const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini";
 const DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const REALTIME_CONFIGURATION_ERROR = "Realtime voice service is not configured.";
 const REALTIME_NEGOTIATION_ERROR = "Realtime call negotiation failed.";
+
+type UnknownRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): UnknownRecord {
+  return typeof value === "object" && value !== null ? value as UnknownRecord : {};
+}
+
+function projectRecord(value: unknown, keys: readonly string[]): UnknownRecord {
+  const source = asRecord(value);
+  return Object.fromEntries(keys.flatMap((key) => key in source ? [[key, source[key]]] : []));
+}
+
+function projectRecords(value: unknown, keys: readonly string[]): UnknownRecord[] {
+  return Array.isArray(value) ? value.map((item) => projectRecord(item, keys)) : [];
+}
+
+function redactRealtimeConversation(text: string, demoRunId: string): string {
+  return sanitizeMemberMessage(text)
+    .replace(/\b\d{4}[\s-]+\d{4}[\s-]+\d{4}\b/g, "[masked Aadhaar-format value]")
+    .replace(/\b[A-Z]{5}\d{10,22}\b/gi, "[masked EPF member ID]")
+    .split(demoRunId).join("[masked session identifier]");
+}
 
 function requireApiKey(): string {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -31,13 +56,69 @@ export async function buildRealtimeSessionConfig({
   route: string;
 }): Promise<Record<string, unknown>> {
   const context = await buildAssistantContext({ demoRunId, route });
+  const maskedMember = asRecord(context.maskedModelSnapshot);
   const maskedScreenContext = {
     route: context.route,
-    screen: context.screen,
-    member: context.maskedModelSnapshot,
-    findings: context.findings,
-    activeProcess: context.activeProcess,
-    recentConversation: context.recentConversation,
+    screen: {
+      name: context.screen.name,
+      purpose: context.screen.purpose,
+      ...(context.screen.officialTerm ? { officialTerm: context.screen.officialTerm } : {}),
+    },
+    member: {
+      persona: maskedMember.persona,
+      profile: projectRecord(maskedMember.profile, ["uanMasked", "onboardingComplete"]),
+      kyc: projectRecords(maskedMember.kyc, ["type", "status", "valueMasked"]),
+      employments: projectRecords(maskedMember.employments, [
+        "memberIdMasked", "establishmentName", "joinedAt", "exitedAt",
+      ]),
+      activeClaim: maskedMember.activeClaim === null ? null : projectRecord(maskedMember.activeClaim, [
+        "type", "status", "submittedAt", "amountDisplayed", "currency",
+      ]),
+      latestClaim: maskedMember.latestClaim === null ? null : projectRecord(maskedMember.latestClaim, [
+        "type", "status", "submittedAt", "amountDisplayed", "currency",
+      ]),
+      claimEvents: projectRecords(maskedMember.claimEvents, ["status", "actor", "explanation", "occurredAt"]),
+      contributionSummary: projectRecord(maskedMember.contributionSummary, [
+        "currency", "displayUnit", "postedEpfBalanceDisplayed",
+      ]),
+      contributions: projectRecords(maskedMember.contributions, [
+        "wageMonth", "postingStatus", "employeeEpfDisplayed", "employerEpfDisplayed", "employerEpsDisplayed",
+      ]),
+      simulations: context.snapshot.simulations.map((simulation) => ({
+        kind: simulation.kind,
+        intervalStart: simulation.intervalStart,
+        intervalEnd: simulation.intervalEnd,
+        intervalLabel: simulation.intervalLabel,
+        months: simulation.months,
+        recordedAt: simulation.recordedAt,
+      })),
+      scenarios: context.snapshot.scenarioRuns.map((scenario) => ({
+        scenarioKey: scenario.scenarioKey,
+        stage: scenario.stage,
+        updatedAt: scenario.updatedAt,
+      })),
+      nextAction: {
+        label: context.snapshot.nextAction.label,
+        href: context.snapshot.nextAction.href,
+      },
+    },
+    findings: context.findings.map((finding) => ({
+      code: finding.code,
+      severity: finding.severity,
+      owner: finding.owner,
+      title: finding.title,
+      explanation: finding.explanation,
+      allowedActions: finding.allowedActions,
+    })),
+    activeProcess: context.activeProcess ? {
+      key: context.activeProcess.key,
+      title: context.activeProcess.title,
+      questionCount: context.activeProcess.questionCount,
+    } : null,
+    recentConversation: context.recentConversation.map(({ role, text }) => ({
+      role,
+      text: redactRealtimeConversation(text, demoRunId),
+    })),
   };
 
   return {

@@ -4,9 +4,40 @@ import { buildRealtimeSessionConfig, createRealtimeCall } from "@/server/assista
 const SDP_MEDIA_TYPE = "application/sdp";
 const MAX_SDP_BYTES = 64 * 1024;
 const MAX_ROUTE_LENGTH = 120;
+const ROUTE_BASE_URL = "http://realtime-route.local";
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 function mediaType(request: Request): string {
   return request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+}
+
+function isSameOriginPathname(route: string): boolean {
+  if (
+    !route.startsWith("/")
+    || route.startsWith("//")
+    || route.includes("\\")
+    || route.includes("://")
+    || CONTROL_CHARACTER_PATTERN.test(route)
+  ) return false;
+
+  let decodedRoute: string;
+  try {
+    decodedRoute = decodeURIComponent(route);
+  } catch {
+    return false;
+  }
+  if (
+    decodedRoute.startsWith("//")
+    || decodedRoute.includes("\\")
+    || decodedRoute.includes("://")
+    || CONTROL_CHARACTER_PATTERN.test(decodedRoute)
+  ) return false;
+
+  const parsed = new URL(route, ROUTE_BASE_URL);
+  return parsed.origin === ROUTE_BASE_URL
+    && parsed.pathname === route
+    && !parsed.search
+    && !parsed.hash;
 }
 
 export async function POST(request: Request) {
@@ -22,7 +53,7 @@ export async function POST(request: Request) {
     }
 
     const route = new URL(request.url).searchParams.get("route")?.trim();
-    if (!route || route.length > MAX_ROUTE_LENGTH) {
+    if (!route || route.length > MAX_ROUTE_LENGTH || !isSameOriginPathname(route)) {
       return Response.json({ error: "Use a valid portal route." }, { status: 422 });
     }
 

@@ -91,6 +91,21 @@ describe("POST /api/assistant/realtime", () => {
     expect(buildRealtimeSessionConfig).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "claims",
+    "https://evil.example/claims",
+    "//evil.example/claims",
+    "/\\evil.example/claims",
+    "/claims\nnext",
+    "/claims%0Anext",
+  ])("rejects non-pathname route context %j", async (route) => {
+    const response = await POST(realtimeRequest({ route }));
+
+    expect(response.status).toBe(422);
+    expect(buildRealtimeSessionConfig).not.toHaveBeenCalled();
+    expect(createRealtimeCall).not.toHaveBeenCalled();
+  });
+
   it("builds authenticated context and forwards answer SDP with safe headers", async () => {
     const offer = "v=0\r\na=offer\r\n";
     const response = await POST(realtimeRequest({ body: offer, contentType: "application/sdp; charset=utf-8" }));

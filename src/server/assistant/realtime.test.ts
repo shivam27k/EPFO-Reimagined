@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 
 import { createDemoRun } from "@/db/demo-runs";
 import { getDb } from "@/db/client";
-import { demoUsers } from "@/db/schema";
+import { conversationMessages, demoUsers, simulationEvents } from "@/db/schema";
 import { DEMO_CREDENTIALS, seedAllDemoUsers } from "@/db/seed-data";
 import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "@/test/factories";
 import { buildRealtimeSessionConfig, createRealtimeCall } from "./realtime";
@@ -63,6 +63,46 @@ describe("Realtime assistant session configuration", () => {
     expect(instructions).not.toContain("1012 3456 7890");
     expect(instructions).not.toContain("PYBOM00424890000012345");
     expect(instructions).not.toContain(demoRunId);
+  });
+
+  it("projects simulation context without structural database identifiers", async () => {
+    const simulationId = `${demoRunId}:realtime-time-advance`;
+    await getDb().insert(simulationEvents).values({
+      id: simulationId,
+      demoRunId,
+      kind: "TIME_ADVANCE",
+      intervalStart: "2026-08",
+      intervalEnd: "2027-01",
+      intervalLabel: "August 2026 to January 2027",
+      months: 6,
+      recordedAt: "2027-02-01T09:00:00.000Z",
+    });
+
+    const config = await buildRealtimeSessionConfig({ demoRunId, route: "/claims" });
+    const instructions = String(config.instructions);
+
+    expect(instructions).toContain("August 2026 to January 2027");
+    expect(instructions).not.toContain(simulationId);
+    expect(instructions).not.toContain(demoRunId);
+    expect(instructions).not.toMatch(/"(?:id|demoRunId)"\s*:/);
+  });
+
+  it("redacts spaced Aadhaar and EPF member IDs from recent conversation", async () => {
+    await getDb().insert(conversationMessages).values({
+      id: "realtime-sensitive-message",
+      demoRunId,
+      role: "member",
+      content: "My Aadhaar is 1012 3456 7890 and member ID is PYBOM00424890000012345.",
+      createdAt: "2026-08-25T08:00:00.000Z",
+    });
+
+    const config = await buildRealtimeSessionConfig({ demoRunId, route: "/overview" });
+    const instructions = String(config.instructions);
+
+    expect(instructions).not.toContain("1012 3456 7890");
+    expect(instructions).not.toContain("PYBOM00424890000012345");
+    expect(instructions).toContain("[masked Aadhaar-format value]");
+    expect(instructions).toContain("[masked EPF member ID]");
   });
 
   it("uses the configured Realtime model override", async () => {
