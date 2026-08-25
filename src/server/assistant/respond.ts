@@ -13,6 +13,8 @@ export interface AssistantReply {
   usedFallback: boolean;
 }
 
+const LOW_CONFIDENCE_THRESHOLD = 0.7;
+
 function fallbackText(context: Awaited<ReturnType<typeof buildAssistantContext>>) {
   const blockers = context.findings.filter((finding) => finding.severity === "BLOCKER");
   if (blockers.length === 0) {
@@ -28,8 +30,17 @@ export async function respondToMember({ demoRunId, route, message }: { demoRunId
   const context = await buildAssistantContext({ demoRunId, route });
   const intent = detectIntent(message, route);
 
+  if (intent.confidence < LOW_CONFIDENCE_THRESHOLD) {
+    return {
+      text: "I’m not sure what you need help with. What would you like to know about this page?",
+      intent,
+      actions: [],
+      usedFallback: true,
+    };
+  }
+
   const actions: AssistantActionProposal[] = [];
-  if (intent.confidence >= 0.7 && intent.intent === "START_CLAIM") {
+  if (intent.intent === "START_CLAIM") {
     actions.push({
       type: "NAVIGATE",
       label: "Review final settlement claim",
@@ -37,7 +48,7 @@ export async function respondToMember({ demoRunId, route, message }: { demoRunId
       requiresConfirmation: true,
     });
   }
-  if (intent.confidence >= 0.7 && intent.intent === "APPLY_CORRECTION") {
+  if (intent.intent === "APPLY_CORRECTION") {
     if (context.findings.some((finding) => finding.code === "MISSING_EXIT_DATE") && context.snapshot.employments[0]) {
       actions.push({
         type: "APPLY_DEMO_CORRECTION",

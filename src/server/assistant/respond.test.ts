@@ -94,6 +94,7 @@ describe("assistant response grounding", () => {
 
     expect(reply.intent.confidence).toBeLessThan(0.7);
     expect(reply.actions).toHaveLength(0);
-    expect(reply.text).toMatch(/what would you like/i);
+    expect(reply.text).toBe("I’m not sure what you need help with. What would you like to know about this page?");
+    expect(reply.text).not.toContain("Bank name does not match Aadhaar");
   });
 });
