@@ -1,10 +1,11 @@
 "use client";
 
 import { Mic } from "lucide-react";
-import { usePathname } from "next/navigation";
 
 import { SafeBilingualText } from "./assistant-language";
-import { useAssistantVoice, type AssistantVoiceState } from "./use-assistant-voice";
+import { useAssistantVoice, type AssistantVoiceCaption, type AssistantVoiceState } from "./use-assistant-voice";
+
+export type { AssistantVoiceCaption } from "./use-assistant-voice";
 
 const statusLabel: Record<AssistantVoiceState, string> = {
   CONNECTING: "Connecting",
@@ -17,14 +18,13 @@ const statusLabel: Record<AssistantVoiceState, string> = {
 
 type AssistantVoiceControlProps = {
   active: boolean;
+  route: string;
   onExit(): void;
-  onReturnToText(): void;
-  submitTranscript(transcript: string, signal?: AbortSignal): Promise<{ text: string } | null>;
+  onReturnToText(captions: AssistantVoiceCaption[]): void;
 };
 
 export function AssistantVoiceControl(props: AssistantVoiceControlProps) {
-  const { active, onExit, onReturnToText } = props;
-  const route = usePathname();
+  const { active, onExit, onReturnToText, route } = props;
   const voice = useAssistantVoice({ active, route });
   const isSpeaking = voice.state === "SPEAKING";
 
@@ -35,7 +35,7 @@ export function AssistantVoiceControl(props: AssistantVoiceControlProps) {
 
   function returnToText() {
     voice.stop();
-    onReturnToText();
+    onReturnToText(voice.completedCaptions);
   }
 
   return (

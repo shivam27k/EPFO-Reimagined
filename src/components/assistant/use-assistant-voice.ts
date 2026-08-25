@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { containsForbiddenScript } from "./assistant-language";
 
 export type AssistantVoiceState = "CONNECTING" | "LISTENING" | "SPEAKING" | "RECONNECTING" | "ERROR" | "IDLE";
+export type AssistantVoiceCaption = { role: "member" | "assistant"; text: string };
 
 const UNSUPPORTED_SCRIPT_NOTICE = "Speech received in an unsupported script. Please speak in English or Hindi.";
 const IDLE_SESSION_MS = 10 * 60 * 1_000;
@@ -44,6 +45,7 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
   const [state, setState] = useState<AssistantVoiceState>("IDLE");
   const [transcript, setTranscript] = useState("");
   const [answer, setAnswer] = useState("");
+  const [completedCaptions, setCompletedCaptions] = useState<AssistantVoiceCaption[]>([]);
   const [error, setError] = useState("");
   const activeRef = useRef(active);
   const routeRef = useRef(route);
@@ -126,7 +128,11 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
       }
       case "conversation.item.input_audio_transcription.completed":
         if (itemId) inputItemRef.current = itemId;
-        if (typeof event.transcript === "string") setTranscript(safeCaption(event.transcript));
+        if (typeof event.transcript === "string") {
+          const completedTranscript = safeCaption(event.transcript);
+          setTranscript(completedTranscript);
+          if (completedTranscript.trim()) setCompletedCaptions((current) => [...current, { role: "member", text: completedTranscript }]);
+        }
         break;
       case "response.output_audio_transcript.delta": {
         if (typeof event.delta !== "string") return;
@@ -137,7 +143,11 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
       }
       case "response.output_audio_transcript.done":
         if (itemId) outputItemRef.current = itemId;
-        if (typeof event.transcript === "string") setAnswer(safeCaption(event.transcript));
+        if (typeof event.transcript === "string") {
+          const completedAnswer = safeCaption(event.transcript);
+          setAnswer(completedAnswer);
+          if (completedAnswer.trim()) setCompletedCaptions((current) => [...current, { role: "assistant", text: completedAnswer }]);
+        }
         break;
       case "output_audio_buffer.started":
         setState("SPEAKING");
@@ -174,6 +184,9 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
     if (!reconnecting) {
       reconnectUsedRef.current = false;
       clearTimers();
+      setTranscript("");
+      setAnswer("");
+      setCompletedCaptions([]);
       startTotalTimer();
     }
     setError("");
@@ -359,6 +372,7 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
     state: active ? state : "IDLE" as AssistantVoiceState,
     transcript,
     answer,
+    completedCaptions,
     error,
     startListening: start,
     stopListening: stop,

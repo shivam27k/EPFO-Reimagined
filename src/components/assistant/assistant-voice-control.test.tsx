@@ -3,10 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AssistantVoiceControl } from "./assistant-voice-control";
 
-const navigation = vi.hoisted(() => ({ pathname: "/overview" }));
-
 vi.mock("next/navigation", () => ({
-  usePathname: () => navigation.pathname,
+  usePathname: () => "/overview",
 }));
 
 class FakeDataChannel {
@@ -117,6 +115,7 @@ function createMicrophoneStream() {
 function renderControl(overrides: Partial<React.ComponentProps<typeof AssistantVoiceControl>> = {}) {
   const props = {
     active: true,
+    route: "/overview",
     onExit: vi.fn(),
     onReturnToText: vi.fn(),
     submitTranscript: vi.fn().mockResolvedValue({ text: "Legacy text answer" }),
@@ -164,7 +163,6 @@ function sentEvents(channel: FakeDataChannel) {
 
 describe("AssistantVoiceControl Realtime WebRTC mode", () => {
   beforeEach(() => {
-    navigation.pathname = "/overview";
     FakeDataChannel.instances = [];
     FakePeerConnection.instances = [];
     FakeRemoteAudio.instances = [];
@@ -246,6 +244,27 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
     expect(caption).not.toHaveTextContent("سلام");
   });
 
+  it("returns every completed caption to text chat without a REST submission", async () => {
+    const onReturnToText = vi.fn();
+    const { channel } = await beginRealtimeSession({ onReturnToText });
+
+    act(() => {
+      channel.receive({ type: "conversation.item.input_audio_transcription.completed", item_id: "member-1", transcript: "मेरा passbook" });
+      channel.receive({ type: "response.output_audio_transcript.done", item_id: "assistant-1", transcript: "आपका passbook तैयार है" });
+      channel.receive({ type: "conversation.item.input_audio_transcription.completed", item_id: "member-2", transcript: "What next?" });
+      channel.receive({ type: "response.output_audio_transcript.done", item_id: "assistant-2", transcript: "Review your contributions." });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open text chat" }));
+
+    expect(onReturnToText).toHaveBeenCalledWith([
+      { role: "member", text: "मेरा passbook" },
+      { role: "assistant", text: "आपका passbook तैयार है" },
+      { role: "member", text: "What next?" },
+      { role: "assistant", text: "Review your contributions." },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("maps streamed audio lifecycle events and allows speech or a control to interrupt output", async () => {
     const { channel } = await beginRealtimeSession();
 
@@ -272,8 +291,7 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
     const { channel, props, rerender } = await beginRealtimeSession();
     expect(channel.send).not.toHaveBeenCalled();
 
-    navigation.pathname = "/claims";
-    rerender(<AssistantVoiceControl {...props} />);
+    rerender(<AssistantVoiceControl {...props} route="/claims" />);
 
     await waitFor(() => expect(channel.send).toHaveBeenCalledTimes(1));
     expect(sentEvents(channel)).toEqual([{

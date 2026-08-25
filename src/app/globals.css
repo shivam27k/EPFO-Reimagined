@@ -3907,6 +3907,8 @@ textarea {
   bottom: 24px;
   display: grid;
   width: 360px;
+  max-width: calc(100vw - 48px);
+  box-sizing: border-box;
   gap: 15px;
   padding: 17px 18px 18px;
   overflow: hidden;
@@ -3915,6 +3917,7 @@ textarea {
   box-shadow: 0 20px 56px rgb(16 35 63 / 0.24);
   background: #fbfdff;
   color: var(--ink);
+  isolation: isolate;
   transition: box-shadow 160ms ease, transform 160ms ease;
 }
 
@@ -4015,7 +4018,12 @@ textarea {
   color: #52647a;
   font-size: 0.8rem;
   line-height: 1.45;
+  overflow-wrap: anywhere;
   text-align: center;
+}
+
+.assistant-message-content {
+  overflow-wrap: anywhere;
 }
 
 .assistant-voice-caption p + p {

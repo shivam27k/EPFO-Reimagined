@@ -1,15 +1,20 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, vi } from "vitest";
 
 import type { MemberSnapshot } from "@/domain/member-snapshot";
 import { AssistantPanel } from "./assistant-panel";
 
+type VoiceCaption = {
+  role: "member" | "assistant";
+  text: string;
+};
+
 type VoiceControlProps = {
   active: boolean;
+  route: string;
   onExit(): void;
-  onReturnToText(): void;
-  submitTranscript(transcript: string, signal?: AbortSignal): Promise<{ text: string } | null>;
+  onReturnToText(captions: VoiceCaption[]): void;
 };
 
 const navigation = vi.hoisted(() => ({ pathname: "/claims" }));
@@ -25,8 +30,18 @@ vi.mock("./assistant-voice-control", () => ({
     voiceHarness.props = props;
     if (!props.active) return null;
     return (
-      <section aria-label="EPF Sahayak voice mode">
-        <button onClick={props.onReturnToText} type="button">Open text chat</button>
+      <section aria-label="EPF Sahayak voice mode" data-route={props.route}>
+        <p>मेरा passbook</p>
+        <p>आपका passbook तैयार है</p>
+        <button
+          onClick={() => props.onReturnToText([
+            { role: "member", text: "मेरा passbook" },
+            { role: "assistant", text: "आपका passbook तैयार है" },
+          ])}
+          type="button"
+        >
+          Open text chat
+        </button>
         <button onClick={props.onExit} type="button">End voice mode</button>
       </section>
     );
@@ -67,120 +82,72 @@ function historyResponse(messages: Array<Record<string, unknown>> = []) {
   return assistantResponse({ messages, dismissedPromptKeys: [], formPatchProposal: [] });
 }
 
+function openVoiceMode() {
+  fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
+  fireEvent.click(screen.getByRole("button", { name: "Talk to EPF Sahayak" }));
+}
+
 describe("AssistantPanel voice integration", () => {
   beforeEach(() => {
     navigation.pathname = "/claims";
     voiceHarness.props = null;
   });
 
-  test("shares the screen-aware assistant submission path while keeping voice and text mutually exclusive", async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === "POST") {
-        return assistantResponse({ text: "Your final claim is ready for review.", usedFallback: false, actions: [] });
-      }
-      return historyResponse();
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(<AssistantPanel snapshot={snapshot()} />);
-    await screen.findByText("Ask about this page, a status, or the safest next action.");
-
-    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
-    const dialog = screen.getByRole("dialog", { name: "EPF Sahayak conversation" });
-    expect(dialog).toHaveAttribute("aria-hidden", "false");
-
-    const composer = dialog.querySelector(".assistant-form");
-    expect(composer).not.toBeNull();
-    expect(within(composer as HTMLElement).getByRole("button", { name: "Talk to EPF Sahayak" })).toBeInTheDocument();
-    expect(dialog.querySelector(".assistant-voice-entry")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Talk to EPF Sahayak" }));
-    expect(dialog).toHaveAttribute("aria-hidden", "true");
-    expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBeInTheDocument();
-
-    const signal = new AbortController().signal;
-    let result: { text: string } | null | undefined;
-    await act(async () => {
-      result = await voiceHarness.props?.submitTranscript("Can I make a final claim?", signal);
-    });
-
-    const assistantPosts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
-    expect(assistantPosts).toHaveLength(1);
-    expect(JSON.parse(String(assistantPosts[0]?.[1]?.body))).toEqual({
-      message: "Can I make a final claim?",
-      route: "/claims",
-    });
-    expect(assistantPosts[0]?.[1]?.signal).toBe(signal);
-    expect(result).toEqual({ text: "Your final claim is ready for review." });
-    expect(within(dialog).getAllByText("Your final claim is ready for review.")).toHaveLength(1);
-
-    fireEvent.click(screen.getByRole("button", { name: "Open text chat" }));
-    expect(screen.queryByRole("region", { name: "EPF Sahayak voice mode" })).not.toBeInTheDocument();
-    expect(dialog).toHaveAttribute("aria-hidden", "false");
-    expect(within(dialog).getByText("Your final claim is ready for review.")).toBeInTheDocument();
-  });
-
-  test("keeps voice mode open across navigation and uses the newly opened route", async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === "POST") {
-        return assistantResponse({ text: "This is your contribution history.", usedFallback: false, actions: [] });
-      }
-      return historyResponse();
-    });
-    vi.stubGlobal("fetch", fetchMock);
+  test("passes route changes to the same mounted voice HUD", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
     const { rerender } = render(<AssistantPanel snapshot={snapshot()} />);
     await screen.findByText("Ask about this page, a status, or the safest next action.");
 
-    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
-    fireEvent.click(screen.getByRole("button", { name: "Talk to EPF Sahayak" }));
-    expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBeInTheDocument();
+    openVoiceMode();
+    const voiceHud = screen.getByRole("region", { name: "EPF Sahayak voice mode" });
+    expect(voiceHud).toHaveAttribute("data-route", "/claims");
+    expect(voiceHarness.props?.route).toBe("/claims");
 
     navigation.pathname = "/passbook";
     rerender(<AssistantPanel snapshot={snapshot()} />);
 
-    await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 0));
-    });
-    expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBeInTheDocument();
-
-    await act(async () => {
-      await voiceHarness.props?.submitTranscript("Explain this page", new AbortController().signal);
-    });
-
-    const assistantPost = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
-    expect(JSON.parse(String(assistantPost?.[1]?.body))).toEqual({
-      message: "Explain this page",
-      route: "/passbook",
-    });
+    expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBe(voiceHud);
+    expect(voiceHud).toHaveAttribute("data-route", "/passbook");
+    expect(voiceHarness.props?.route).toBe("/passbook");
   });
 
-  test("does not append an answer when a voice submission is cancelled", async () => {
-    let resolveAssistantBody: ((body: Record<string, unknown>) => void) | undefined;
-    const assistantBody = new Promise<Record<string, unknown>>((resolve) => {
-      resolveAssistantBody = resolve;
-    });
-    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === "POST") return { ok: true, json: () => assistantBody };
-      return historyResponse();
-    }));
-
+  test("moves visible voice captions into text chat without submitting them", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<ReturnType<typeof historyResponse>>>(async () => historyResponse());
+    vi.stubGlobal("fetch", fetchMock);
     render(<AssistantPanel snapshot={snapshot()} />);
     await screen.findByText("Ask about this page, a status, or the safest next action.");
+
+    openVoiceMode();
+    fireEvent.click(screen.getByRole("button", { name: "Open text chat" }));
+
+    expect(screen.queryByRole("region", { name: "EPF Sahayak voice mode" })).not.toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "EPF Sahayak conversation" });
+    expect(dialog).toHaveAttribute("aria-hidden", "false");
+    const messages = dialog.querySelectorAll(".assistant-message");
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toHaveAttribute("data-role", "member");
+    expect(messages[0]?.querySelector(".assistant-message-content")).toHaveTextContent("मेरा passbook");
+    expect(messages[1]).toHaveAttribute("data-role", "assistant");
+    expect(messages[1]?.querySelector(".assistant-message-content")).toHaveTextContent("आपका passbook तैयार है");
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+  });
+
+  test("renders text messages with safe English and Devanagari spans", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse([
+      { role: "member", text: "मेरा passbook" },
+      { role: "assistant", text: "आपका **passbook** तैयार है", source: "openai" },
+      { role: "assistant", text: "سلام", source: "openai" },
+    ])));
+    render(<AssistantPanel snapshot={snapshot()} />);
+
     fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
-    fireEvent.click(screen.getByRole("button", { name: "Talk to EPF Sahayak" }));
-
-    const controller = new AbortController();
-    let submission: Promise<{ text: string } | null> | undefined;
-    act(() => {
-      submission = voiceHarness.props?.submitTranscript("Is this screen ready?", controller.signal);
-    });
-    controller.abort();
-    resolveAssistantBody?.({ text: "This stale answer must not appear.", usedFallback: false, actions: [] });
-
-    await act(async () => {
-      expect(await submission).toBeNull();
-    });
-    expect(screen.queryByText("This stale answer must not appear.")).not.toBeInTheDocument();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "EPF Sahayak conversation" });
+    const messageContent = dialog.querySelectorAll(".assistant-message-content");
+    expect(messageContent[0]?.querySelector(".assistant-text-hindi")).toHaveTextContent("मेरा");
+    expect(messageContent[0]?.querySelector(".assistant-text-english")).toHaveTextContent("passbook");
+    expect(messageContent[1]?.querySelector(".assistant-text-hindi")).toHaveTextContent("आपका");
+    expect(within(messageContent[1] as HTMLElement).getByText("passbook").tagName).toBe("SPAN");
+    expect(messageContent[2]).toHaveTextContent("Speech received in an unsupported script. Please speak in English or Hindi.");
+    expect(dialog).not.toHaveTextContent("سلام");
   });
 });

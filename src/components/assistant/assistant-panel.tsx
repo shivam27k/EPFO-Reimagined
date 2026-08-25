@@ -15,7 +15,7 @@ import { processDefinitions } from "@/domain/process-definitions";
 import { buildQuestionBatches, type FormFieldProposal, type FormPatchScope } from "@/server/assistant/form-copilot";
 import type { AssistantActionProposal } from "@/server/assistant/tools";
 import { AssistantMessage } from "./assistant-message";
-import { AssistantVoiceControl } from "./assistant-voice-control";
+import { AssistantVoiceControl, type AssistantVoiceCaption } from "./assistant-voice-control";
 import { FormPatchReview } from "./form-patch-review";
 import { ProactivePrompt, type ProactivePromptModel } from "./proactive-prompt";
 
@@ -109,7 +109,8 @@ export function AssistantPanel({
     closeAssistant();
   }
 
-  function returnToText() {
+  function returnToText(captions: AssistantVoiceCaption[]) {
+    if (captions.length > 0) setMessages((current) => [...current, ...captions]);
     setVoiceActive(false);
     openAssistant();
   }
@@ -276,7 +277,7 @@ export function AssistantPanel({
         </form>{extractionMessage ? <p className="extraction-feedback" role="status">{extractionMessage}</p> : null}{proposals.length > 0 ? <><div className="patch-scope" aria-label="Apply scope"><button aria-pressed={patchScope === "FIELD"} onClick={() => setPatchScope("FIELD")} type="button">One field</button><button aria-pressed={patchScope === "SECTION"} onClick={() => setPatchScope("SECTION")} type="button">This section</button><button aria-pressed={patchScope === "WHOLE_FORM"} onClick={() => setPatchScope("WHOLE_FORM")} type="button">All extracted</button></div><FormPatchReview proposals={scopedProposals} scope={patchScope} pending={patchPending} onConfirm={applyPatch} onCancel={() => { setProposals([]); setExtractionMessage("Proposals cancelled. No data changed."); void persistState({ kind: "DISMISS_FORM_PATCH" }).catch(() => setPanelError("The proposal was hidden, but that choice may not survive a refresh.")); }} /></> : null}</details> : null}
         <form className="assistant-form" onSubmit={(event) => { event.preventDefault(); sendMessage(input); }}><label htmlFor="assistant-message">Ask EPF Sahayak</label><input id="assistant-message" onChange={(event) => setInput(event.target.value)} placeholder="Why is this blocked?" value={input} /><button aria-label="Talk to EPF Sahayak" className="assistant-voice-button" disabled={pending} onClick={startVoice} title="Voice" type="button"><Mic aria-hidden="true" size={18} /></button><button className="primary-action" disabled={pending || !input.trim()} type="submit"><Send aria-hidden="true" size={16} /> Send</button></form>
       </aside>
-      {voiceActive ? <AssistantVoiceControl active onExit={() => setVoiceActive(false)} onReturnToText={returnToText} submitTranscript={sendMessage} /> : null}
+      {voiceActive ? <AssistantVoiceControl active onExit={() => setVoiceActive(false)} onReturnToText={returnToText} route={pathname} /> : null}
     </section>
   );
 }
