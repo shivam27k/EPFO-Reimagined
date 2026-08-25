@@ -1,34 +1,32 @@
 "use client";
 
 import { Mic } from "lucide-react";
+import { usePathname } from "next/navigation";
 
+import { SafeBilingualText } from "./assistant-language";
 import { useAssistantVoice, type AssistantVoiceState } from "./use-assistant-voice";
 
 const statusLabel: Record<AssistantVoiceState, string> = {
-  REQUESTING_PERMISSION: "Requesting microphone permission",
+  CONNECTING: "Connecting",
   LISTENING: "Listening",
-  TRANSCRIBING: "Transcribing",
-  THINKING: "Thinking",
   SPEAKING: "Speaking",
+  RECONNECTING: "Reconnecting",
   ERROR: "Voice needs attention",
-  IDLE: "Ready to listen",
+  IDLE: "Ready for voice",
 };
 
-export function AssistantVoiceControl({
-  active,
-  onExit,
-  onReturnToText,
-  submitTranscript,
-}: {
+type AssistantVoiceControlProps = {
   active: boolean;
   onExit(): void;
   onReturnToText(): void;
   submitTranscript(transcript: string, signal?: AbortSignal): Promise<{ text: string } | null>;
-}) {
-  const voice = useAssistantVoice({ active, submitTranscript });
-  const isListening = voice.state === "LISTENING";
+};
+
+export function AssistantVoiceControl(props: AssistantVoiceControlProps) {
+  const { active, onExit, onReturnToText } = props;
+  const route = usePathname();
+  const voice = useAssistantVoice({ active, route });
   const isSpeaking = voice.state === "SPEAKING";
-  const unavailable = voice.state === "REQUESTING_PERMISSION" || voice.state === "TRANSCRIBING" || voice.state === "THINKING";
 
   function exit() {
     voice.stop();
@@ -50,15 +48,14 @@ export function AssistantVoiceControl({
         <strong aria-live="polite" className="assistant-voice-status" role="status">{statusLabel[voice.state]}</strong>
       </div>
       <div aria-label="Voice caption" className="assistant-voice-caption" role="group">
-        {!voice.transcript && !voice.answer && !voice.error ? <p>Speak a question about this page. Your answer will stay visible in text.</p> : null}
-        {voice.transcript ? <p><strong>You said:</strong> {voice.transcript}</p> : null}
-        {voice.answer ? <p><strong>EPF Sahayak:</strong> {voice.answer}</p> : null}
+        {!voice.transcript && !voice.answer && !voice.error ? <p>Speak naturally about this page. You can interrupt while EPF Sahayak is speaking.</p> : null}
+        {voice.transcript ? <p><strong>You said:</strong> <SafeBilingualText text={voice.transcript} /></p> : null}
+        {voice.answer ? <p><strong>EPF Sahayak:</strong> <SafeBilingualText text={voice.answer} /></p> : null}
         {voice.error ? <p role="alert">{voice.error}</p> : null}
       </div>
       <div aria-label="Voice controls" className="assistant-voice-controls" role="group">
-        {isListening ? <button className="assistant-voice-state-action" disabled={!active} onClick={voice.stopListening} type="button">Stop listening</button> : null}
         {isSpeaking ? <button className="assistant-voice-state-action" disabled={!active} onClick={voice.stopSpeaking} type="button">Stop playback</button> : null}
-        {!isListening && !isSpeaking && !unavailable && voice.state !== "ERROR" ? <button className="assistant-voice-state-action" disabled={!active} onClick={() => void voice.startListening()} type="button">Start listening</button> : null}
+        {voice.state === "IDLE" ? <button className="assistant-voice-state-action" disabled={!active} onClick={voice.startListening} type="button">Start voice</button> : null}
         {voice.state === "ERROR" ? <button className="assistant-voice-state-action" disabled={!active} onClick={voice.retry} type="button">Retry voice</button> : null}
         <button disabled={!active} onClick={returnToText} type="button">Open text chat</button>
         <button disabled={!active} onClick={exit} type="button">End voice mode</button>

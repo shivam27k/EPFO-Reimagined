@@ -1,346 +1,369 @@
 "use client";
-/* eslint-disable react-hooks/immutability, react-hooks/preserve-manual-memoization */
+/* eslint-disable react-hooks/refs */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type AssistantVoiceState = "REQUESTING_PERMISSION" | "LISTENING" | "TRANSCRIBING" | "THINKING" | "SPEAKING" | "ERROR" | "IDLE";
-type SubmitTranscript = (transcript: string, signal?: AbortSignal) => Promise<{ text: string } | null>;
+import { containsForbiddenScript } from "./assistant-language";
 
-const GREETING = "Hi, I’m EPF Sahayak. What would you like help with?";
-const SILENCE_MS = 1_200;
-const MAX_TURN_MS = 30_000;
+export type AssistantVoiceState = "CONNECTING" | "LISTENING" | "SPEAKING" | "RECONNECTING" | "ERROR" | "IDLE";
 
-function messageFor(error: unknown, fallback: string) {
-  return error instanceof Error && error.message ? error.message : fallback;
+const UNSUPPORTED_SCRIPT_NOTICE = "Speech received in an unsupported script. Please speak in English or Hindi.";
+const IDLE_SESSION_MS = 10 * 60 * 1_000;
+const MAX_SESSION_MS = 30 * 60 * 1_000;
+
+type RealtimeEvent = {
+  type?: unknown;
+  delta?: unknown;
+  transcript?: unknown;
+  item_id?: unknown;
+};
+
+type VoiceResources = {
+  peer: RTCPeerConnection;
+  channel: RTCDataChannel;
+  microphone: MediaStream;
+  remoteStream: MediaStream | null;
+  audio: HTMLAudioElement;
+  negotiation: AbortController;
+};
+
+function safeCaption(text: string): string {
+  return containsForbiddenScript(text) ? UNSUPPORTED_SCRIPT_NOTICE : text;
 }
 
-function extensionFor(mimeType: string) {
-  return mimeType.includes("mp4") ? "mp4" : "webm";
+function appendCaption(current: string, delta: string): string {
+  if (current === UNSUPPORTED_SCRIPT_NOTICE) return current;
+  return safeCaption(`${current}${delta}`);
 }
 
-export function useAssistantVoice({ active, submitTranscript }: { active: boolean; submitTranscript: SubmitTranscript }) {
+function isPermissionDenied(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "NotAllowedError";
+}
+
+export function useAssistantVoice({ active, route }: { active: boolean; route: string }) {
   const [state, setState] = useState<AssistantVoiceState>("IDLE");
   const [transcript, setTranscript] = useState("");
   const [answer, setAnswer] = useState("");
   const [error, setError] = useState("");
   const activeRef = useRef(active);
-  const submitTranscriptRef = useRef(submitTranscript);
-  const greetedRef = useRef(false);
-  const streamRef = useRef<MediaStream | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const objectUrlRef = useRef<string | null>(null);
-  const requestsRef = useRef(new Set<AbortController>());
-  const maxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const animationRef = useRef<number | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const operationRef = useRef(0);
-  const afterSpeechRef = useRef<(() => void) | null>(null);
-  const lastAnswerRef = useRef("");
-  const errorKindRef = useRef<"recording" | "speech" | null>(null);
-  useEffect(() => {
-    activeRef.current = active;
-  }, [active]);
-  useEffect(() => {
-    submitTranscriptRef.current = submitTranscript;
-  }, [submitTranscript]);
+  const routeRef = useRef(route);
+  const negotiatedRouteRef = useRef("");
+  const resourcesRef = useRef<VoiceResources | null>(null);
+  const generationRef = useRef(0);
+  const reconnectUsedRef = useRef(false);
+  const connectRef = useRef<(reconnecting: boolean) => void>(() => undefined);
+  const inputItemRef = useRef("");
+  const outputItemRef = useRef("");
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const totalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const clearAnalysis = useCallback(() => {
-    if (maxTimerRef.current) clearTimeout(maxTimerRef.current);
-    maxTimerRef.current = null;
-    if (animationRef.current !== null) window.cancelAnimationFrame(animationRef.current);
-    animationRef.current = null;
-    if (audioContextRef.current) void audioContextRef.current.close();
-    audioContextRef.current = null;
+  const clearTimers = useCallback(() => {
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    if (totalTimerRef.current) clearTimeout(totalTimerRef.current);
+    idleTimerRef.current = null;
+    totalTimerRef.current = null;
   }, []);
 
-  const stopPlayback = useCallback(() => {
-    afterSpeechRef.current = null;
-    if (audioRef.current) {
-      audioRef.current.onended = null;
-      audioRef.current.onerror = null;
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-    objectUrlRef.current = null;
+  const closeResources = useCallback(() => {
+    const resources = resourcesRef.current;
+    resourcesRef.current = null;
+    if (!resources) return;
+
+    resources.negotiation.abort();
+    resources.channel.onopen = null;
+    resources.channel.onmessage = null;
+    resources.channel.onerror = null;
+    resources.channel.onclose = null;
+    resources.peer.ontrack = null;
+    resources.peer.onconnectionstatechange = null;
+    resources.channel.close();
+    resources.peer.close();
+
+    const tracks = new Set<MediaStreamTrack>(resources.microphone.getTracks());
+    resources.remoteStream?.getTracks().forEach((track) => tracks.add(track));
+    tracks.forEach((track) => track.stop());
+
+    resources.audio.pause();
+    resources.audio.srcObject = null;
   }, []);
 
-  const stopCapture = useCallback((stopRecorder: boolean) => {
-    clearAnalysis();
-    const recorder = recorderRef.current;
-    recorderRef.current = null;
-    if (stopRecorder && recorder && recorder.state !== "inactive") recorder.stop();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-  }, [clearAnalysis]);
-
-  const cancelActiveWork = useCallback(() => {
-    operationRef.current += 1;
-    requestsRef.current.forEach((controller) => controller.abort());
-    requestsRef.current.clear();
-    stopCapture(true);
-    stopPlayback();
-  }, [stopCapture, stopPlayback]);
-
-  const fail = useCallback((text: string, kind: "recording" | "speech") => {
-    errorKindRef.current = kind;
-    setError(text);
+  const fail = useCallback((message: string) => {
+    generationRef.current += 1;
+    closeResources();
+    clearTimers();
+    setError(message);
     setState("ERROR");
-  }, []);
+  }, [clearTimers, closeResources]);
 
-  const startRecorder = useCallback((stream: MediaStream, mimeType: string, token: number) => {
-    if (!activeRef.current || token !== operationRef.current) {
-      stream.getTracks().forEach((track) => track.stop());
-      return;
-    }
-    try {
-      const recorder = new MediaRecorder(stream, { mimeType });
-      streamRef.current = stream;
-      recorderRef.current = recorder;
-      chunksRef.current = [];
-      recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data); };
-      recorder.onstop = () => {
-        recorderRef.current = null;
-        const recording = new Blob(chunksRef.current, { type: recorder.mimeType });
-        chunksRef.current = [];
-        void processRecording(recording, token);
-      };
-      recorder.start();
-      setState("LISTENING");
-      maxTimerRef.current = setTimeout(() => finishRecording(), MAX_TURN_MS);
-      watchForSilence(stream);
-    } catch (caught) {
-      stream.getTracks().forEach((track) => track.stop());
-      fail(messageFor(caught, "I could not start voice recording. Please use text chat."), "recording");
-    }
-  // Declarations below are stable callbacks; this function is invoked after they initialise.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const resetIdleTimer = useCallback(() => {
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = setTimeout(() => {
+      if (!activeRef.current) return;
+      fail("Voice mode ended after 10 minutes without activity. Retry voice or use text chat.");
+    }, IDLE_SESSION_MS);
   }, [fail]);
 
-  const finishRecording = useCallback(() => {
-    const recorder = recorderRef.current;
-    if (!recorder || recorder.state === "inactive") return;
-    clearAnalysis();
-    recorder.stop();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-  }, [clearAnalysis]);
+  const sendClientEvent = useCallback((event: Record<string, unknown>): boolean => {
+    const channel = resourcesRef.current?.channel;
+    if (!channel || channel.readyState !== "open") return false;
+    channel.send(JSON.stringify(event));
+    resetIdleTimer();
+    return true;
+  }, [resetIdleTimer]);
 
-  const watchForSilence = useCallback((stream: MediaStream) => {
-    if (!window.AudioContext) return;
-    try {
-      const context = new AudioContext();
-      const analyser = context.createAnalyser();
-      analyser.fftSize = 512;
-      context.createMediaStreamSource(stream).connect(analyser);
-      audioContextRef.current = context;
-      const samples = new Uint8Array(analyser.fftSize);
-      let heardSpeech = false;
-      let silenceStartedAt = 0;
-      const sample = () => {
-        analyser.getByteTimeDomainData(samples);
-        const energy = samples.reduce((sum, value) => sum + Math.abs(value - 128), 0) / samples.length;
-        if (energy > 7) {
-          heardSpeech = true;
-          silenceStartedAt = 0;
-        } else if (heardSpeech) {
-          silenceStartedAt ||= Date.now();
-          if (Date.now() - silenceStartedAt >= SILENCE_MS) {
-            finishRecording();
-            return;
-          }
-        }
-        animationRef.current = window.requestAnimationFrame(sample);
-      };
-      animationRef.current = window.requestAnimationFrame(sample);
-    } catch {
-      // A visible manual stop and the maximum recording timer remain available.
+  const handleRealtimeEvent = useCallback((event: RealtimeEvent) => {
+    if (!activeRef.current || typeof event.type !== "string") return;
+    resetIdleTimer();
+
+    const itemId = typeof event.item_id === "string" ? event.item_id : "";
+    switch (event.type) {
+      case "conversation.item.input_audio_transcription.delta": {
+        if (typeof event.delta !== "string") return;
+        const isNewItem = Boolean(itemId) && itemId !== inputItemRef.current;
+        if (itemId) inputItemRef.current = itemId;
+        setTranscript((current) => isNewItem ? safeCaption(event.delta as string) : appendCaption(current, event.delta as string));
+        break;
+      }
+      case "conversation.item.input_audio_transcription.completed":
+        if (itemId) inputItemRef.current = itemId;
+        if (typeof event.transcript === "string") setTranscript(safeCaption(event.transcript));
+        break;
+      case "response.output_audio_transcript.delta": {
+        if (typeof event.delta !== "string") return;
+        const isNewItem = Boolean(itemId) && itemId !== outputItemRef.current;
+        if (itemId) outputItemRef.current = itemId;
+        setAnswer((current) => isNewItem ? safeCaption(event.delta as string) : appendCaption(current, event.delta as string));
+        break;
+      }
+      case "response.output_audio_transcript.done":
+        if (itemId) outputItemRef.current = itemId;
+        if (typeof event.transcript === "string") setAnswer(safeCaption(event.transcript));
+        break;
+      case "output_audio_buffer.started":
+        setState("SPEAKING");
+        break;
+      case "output_audio_buffer.stopped":
+        setState("LISTENING");
+        break;
+      case "input_audio_buffer.speech_started":
+        inputItemRef.current = "";
+        setTranscript("");
+        setState("LISTENING");
+        break;
+      case "error":
+        fail("Realtime voice needs attention. Retry voice or use text chat.");
+        break;
+      default:
+        break;
     }
-  }, [finishRecording]);
+  }, [fail, resetIdleTimer]);
 
-  const processRecording = useCallback(async (recording: Blob, token: number) => {
-    if (!activeRef.current || token !== operationRef.current) return;
-    if (!recording.size) {
-      setTranscript("");
-      setError("I didn’t catch that—please try again.");
-      setState("IDLE");
+  const startTotalTimer = useCallback(() => {
+    if (totalTimerRef.current) clearTimeout(totalTimerRef.current);
+    totalTimerRef.current = setTimeout(() => {
+      if (!activeRef.current) return;
+      fail("Voice mode reached its 30-minute limit. Start a new voice session or use text chat.");
+    }, MAX_SESSION_MS);
+  }, [fail]);
+
+  const connect = useCallback(async (reconnecting: boolean) => {
+    if (!activeRef.current) return;
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
+    closeResources();
+    if (!reconnecting) {
+      reconnectUsedRef.current = false;
+      clearTimers();
+      startTotalTimer();
+    }
+    setError("");
+    setState(reconnecting ? "RECONNECTING" : "CONNECTING");
+
+    if (typeof RTCPeerConnection === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      fail("Realtime voice is not supported in this browser. Please use text chat.");
       return;
     }
-    setState("TRANSCRIBING");
-    const transcriptionController = new AbortController();
-    requestsRef.current.add(transcriptionController);
+
+    let microphone: MediaStream | null = null;
     try {
-      const mimeType = recording.type || "audio/webm";
-      const body = new FormData();
-      body.set("audio", new File([recording], `voice-turn.${extensionFor(mimeType)}`, { type: mimeType }));
-      const response = await fetch("/api/assistant/transcribe", { method: "POST", body, signal: transcriptionController.signal });
-      const payload = await response.json().catch(() => ({})) as { transcript?: unknown; error?: unknown };
-      const recognised = typeof payload.transcript === "string" ? payload.transcript.trim() : "";
-      if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : "I could not transcribe that recording. Please try again.");
-      if (!recognised) {
-        setTranscript("");
-        setError("I didn’t catch that—please try again.");
-        setState("IDLE");
+      microphone = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!activeRef.current || generation !== generationRef.current) {
+        microphone.getTracks().forEach((track) => track.stop());
         return;
       }
-      if (!activeRef.current || token !== operationRef.current) return;
-      setTranscript(recognised);
-      setState("THINKING");
-      const assistantController = new AbortController();
-      requestsRef.current.add(assistantController);
-      let result: { text: string } | null;
-      try {
-        result = await submitTranscriptRef.current(recognised, assistantController.signal);
-      } finally {
-        requestsRef.current.delete(assistantController);
-      }
-      const text = result?.text?.trim();
-      if (!text) throw new Error("I could not get an answer right now. You can try again or use text chat.");
-      if (!activeRef.current || token !== operationRef.current) return;
-      setAnswer(text);
-      lastAnswerRef.current = text;
-      await playSpeech(text, token);
-    } catch (caught) {
-      if (transcriptionController.signal.aborted || token !== operationRef.current || !activeRef.current) return;
-      fail(messageFor(caught, "Voice processing failed. Please try again or use text chat."), "recording");
-    } finally {
-      requestsRef.current.delete(transcriptionController);
-    }
-  // Declarations below are stable callbacks; this function is invoked after they initialise.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fail]);
 
-  const finishSpeech = useCallback((token: number) => {
-    if (!activeRef.current || token !== operationRef.current) return;
-    const after = afterSpeechRef.current;
-    stopPlayback();
-    if (after) after();
-    else setState("IDLE");
-  }, [stopPlayback]);
+      const peer = new RTCPeerConnection();
+      const audio = new Audio();
+      audio.autoplay = true;
+      const channel = peer.createDataChannel("oai-events");
+      const negotiation = new AbortController();
+      const resources: VoiceResources = {
+        peer,
+        channel,
+        microphone,
+        remoteStream: null,
+        audio,
+        negotiation,
+      };
+      resourcesRef.current = resources;
 
-  const playSpeech = useCallback(async (text: string, token: number, after?: () => void, greeting = false) => {
-    const controller = new AbortController();
-    requestsRef.current.add(controller);
-    afterSpeechRef.current = after ?? null;
-    setState("SPEAKING");
-    try {
-      const response = await fetch("/api/assistant/speech", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }), signal: controller.signal });
-      if (!response.ok) throw new Error("I could not prepare spoken audio. You can still read the answer.");
-      const blob = await response.blob();
-      if (!blob.size) throw new Error("I could not prepare spoken audio. You can still read the answer.");
-      if (!activeRef.current || token !== operationRef.current) return;
-      const objectUrl = URL.createObjectURL(blob);
-      objectUrlRef.current = objectUrl;
-      const audio = new Audio(objectUrl);
-      audioRef.current = audio;
-      audio.onended = () => finishSpeech(token);
-      audio.onerror = () => {
-        if (!activeRef.current || token !== operationRef.current) return;
-        const afterGreeting = afterSpeechRef.current;
-        stopPlayback();
-        if (greeting && afterGreeting) {
-          setError("I could not play the greeting. You can start speaking when you are ready.");
-          afterGreeting();
+      microphone.getTracks().forEach((track) => peer.addTrack(track, microphone as MediaStream));
+
+      const requestReconnect = () => {
+        if (!activeRef.current || generation !== generationRef.current) return;
+        if (!reconnectUsedRef.current) {
+          reconnectUsedRef.current = true;
+          setState("RECONNECTING");
+          connectRef.current(true);
           return;
         }
-        fail("I could not play the spoken answer. You can still read it and try again.", "speech");
+        fail("Voice could not reconnect. Open text chat or retry voice.");
       };
-      await audio.play();
+
+      peer.ontrack = (event) => {
+        if (generation !== generationRef.current) return;
+        const stream = event.streams[0] ?? new MediaStream([event.track]);
+        resources.remoteStream = stream;
+        audio.srcObject = stream;
+      };
+      peer.onconnectionstatechange = () => {
+        if (peer.connectionState === "failed" || peer.connectionState === "disconnected") requestReconnect();
+      };
+      channel.onmessage = (message) => {
+        if (generation !== generationRef.current || typeof message.data !== "string") return;
+        try {
+          handleRealtimeEvent(JSON.parse(message.data) as RealtimeEvent);
+        } catch {
+          fail("Realtime voice sent an unreadable update. Retry voice or use text chat.");
+        }
+      };
+      channel.onerror = requestReconnect;
+      channel.onclose = requestReconnect;
+      channel.onopen = () => {
+        if (!activeRef.current || generation !== generationRef.current) return;
+        setState("LISTENING");
+        resetIdleTimer();
+        if (routeRef.current !== negotiatedRouteRef.current) {
+          const currentRoute = routeRef.current;
+          if (sendClientEvent({
+            type: "session.update",
+            session: {
+              type: "realtime",
+              instructions: `The member is now viewing portal route ${currentRoute}. Keep responses grounded in this screen.`,
+            },
+          })) negotiatedRouteRef.current = currentRoute;
+        }
+      };
+
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      const offerSdp = offer.sdp?.trim();
+      if (!offerSdp) throw new Error("EMPTY_OFFER");
+      const negotiatedRoute = routeRef.current;
+      const response = await fetch(`/api/assistant/realtime?route=${encodeURIComponent(negotiatedRoute)}`, {
+        method: "POST",
+        headers: { "content-type": "application/sdp" },
+        body: offer.sdp,
+        signal: negotiation.signal,
+      });
+      if (!response.ok) throw new Error(response.status === 401 ? "AUTHENTICATION_REQUIRED" : "NEGOTIATION_FAILED");
+      const answerSdp = await response.text();
+      if (!answerSdp.trim()) throw new Error("EMPTY_ANSWER");
+      if (!activeRef.current || generation !== generationRef.current) return;
+      await peer.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: answerSdp }));
+      negotiatedRouteRef.current = negotiatedRoute;
     } catch (caught) {
-      if (controller.signal.aborted || token !== operationRef.current || !activeRef.current) return;
-      const afterGreeting = afterSpeechRef.current;
-      stopPlayback();
-      if (greeting && afterGreeting) {
-        setError("I could not play the greeting. You can start speaking when you are ready.");
-        afterGreeting();
+      if (!activeRef.current || generation !== generationRef.current) {
+        if (microphone && resourcesRef.current?.microphone !== microphone) {
+          microphone.getTracks().forEach((track) => track.stop());
+        }
         return;
       }
-      fail(messageFor(caught, "I could not play the spoken answer. You can still read it and try again."), "speech");
-    } finally {
-      requestsRef.current.delete(controller);
-    }
-  }, [fail, finishSpeech, stopPlayback]);
-
-  const supportedMime = useCallback(() => {
-    if (typeof MediaRecorder === "undefined") return null;
-    if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) return "audio/webm;codecs=opus";
-    if (MediaRecorder.isTypeSupported("audio/mp4")) return "audio/mp4";
-    return null;
-  }, []);
-
-  const startListening = useCallback(async () => {
-    if (!activeRef.current) return;
-    cancelActiveWork();
-    setError("");
-    errorKindRef.current = null;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      fail("Voice recording is not supported in this browser. Please use text chat.", "recording");
-      return;
-    }
-    const mimeType = supportedMime();
-    if (!mimeType) {
-      fail("Voice recording is not supported in this browser. Please use text chat.", "recording");
-      return;
-    }
-    const token = operationRef.current;
-    setState("REQUESTING_PERMISSION");
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!activeRef.current || token !== operationRef.current) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-      streamRef.current = stream;
-      if (!greetedRef.current) {
-        greetedRef.current = true;
-        setAnswer(GREETING);
-        await playSpeech(GREETING, token, () => startRecorder(stream, mimeType, token), true);
+      if (isPermissionDenied(caught)) {
+        fail("Microphone permission was denied. Allow it in your browser settings, then retry.");
+      } else if (caught instanceof Error && caught.message === "AUTHENTICATION_REQUIRED") {
+        fail("Voice session could not authenticate. Please sign in again or use text chat.");
+      } else if (reconnecting) {
+        fail("Voice could not reconnect. Open text chat or retry voice.");
       } else {
-        startRecorder(stream, mimeType, token);
+        fail("Realtime voice could not connect. Retry voice or use text chat.");
       }
-    } catch (caught) {
-      if (token !== operationRef.current || !activeRef.current) return;
-      const denied = caught instanceof DOMException && caught.name === "NotAllowedError";
-      fail(denied ? "Microphone permission was denied. Allow it in your browser settings, then retry." : messageFor(caught, "I could not start the microphone. Please try again or use text chat."), "recording");
     }
-  }, [cancelActiveWork, fail, playSpeech, startRecorder, supportedMime]);
+  }, [clearTimers, closeResources, fail, handleRealtimeEvent, resetIdleTimer, sendClientEvent, startTotalTimer]);
 
-  const stopListening = useCallback(() => finishRecording(), [finishRecording]);
+  connectRef.current = (reconnecting) => {
+    void connect(reconnecting);
+  };
 
   const stopSpeaking = useCallback(() => {
-    cancelActiveWork();
-    setState("IDLE");
-  }, [cancelActiveWork]);
+    sendClientEvent({ type: "response.cancel" });
+    sendClientEvent({ type: "output_audio_buffer.clear" });
+    setState("LISTENING");
+  }, [sendClientEvent]);
 
-  const retry = useCallback(() => {
-    if (errorKindRef.current === "speech" && lastAnswerRef.current) {
-      operationRef.current += 1;
-      const token = operationRef.current;
-      setError("");
-      void playSpeech(lastAnswerRef.current, token);
-      return;
-    }
-    void startListening();
-  }, [playSpeech, startListening]);
+  const start = useCallback(() => {
+    if (!active) return;
+    activeRef.current = true;
+    reconnectUsedRef.current = false;
+    void connect(false);
+  }, [active, connect]);
 
   const stop = useCallback(() => {
-    cancelActiveWork();
+    activeRef.current = false;
+    generationRef.current += 1;
+    closeResources();
+    clearTimers();
+    setError("");
     setState("IDLE");
-  }, [cancelActiveWork]);
+  }, [clearTimers, closeResources]);
 
   useEffect(() => {
-    if (active) return cancelActiveWork;
-    cancelActiveWork();
-    queueMicrotask(() => {
-      if (!activeRef.current) {
-        setState("IDLE");
-        setError("");
-      }
-    });
-    return cancelActiveWork;
-  }, [active, cancelActiveWork]);
+    routeRef.current = route;
+    if (!active || route === negotiatedRouteRef.current) return;
+    if (sendClientEvent({
+      type: "session.update",
+      session: {
+        type: "realtime",
+        instructions: `The member is now viewing portal route ${route}. Keep responses grounded in this screen.`,
+      },
+    })) negotiatedRouteRef.current = route;
+  }, [active, route, sendClientEvent]);
 
-  return { state: active ? state : "IDLE" as AssistantVoiceState, transcript, answer, error, startListening, stopListening, stopSpeaking, retry, stop };
+  useEffect(() => {
+    activeRef.current = active;
+    if (!active) {
+      generationRef.current += 1;
+      closeResources();
+      clearTimers();
+      queueMicrotask(() => {
+        if (!activeRef.current) {
+          setError("");
+          setState("IDLE");
+        }
+      });
+      return;
+    }
+
+    queueMicrotask(() => {
+      if (activeRef.current) void connect(false);
+    });
+    return () => {
+      activeRef.current = false;
+      generationRef.current += 1;
+      closeResources();
+      clearTimers();
+    };
+  }, [active, clearTimers, closeResources, connect]);
+
+  return {
+    state: active ? state : "IDLE" as AssistantVoiceState,
+    transcript,
+    answer,
+    error,
+    startListening: start,
+    stopListening: stop,
+    stopSpeaking,
+    retry: start,
+    stop,
+  };
 }

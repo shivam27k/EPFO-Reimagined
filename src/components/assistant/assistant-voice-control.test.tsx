@@ -1,263 +1,389 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AssistantVoiceControl } from "./assistant-voice-control";
 
-class FakeMediaRecorder {
-  static instances: FakeMediaRecorder[] = [];
-  static isTypeSupported = vi.fn<(mime: string) => boolean>();
-  state: "inactive" | "recording" = "inactive";
-  mimeType: string;
-  ondataavailable: ((event: BlobEvent) => void) | null = null;
-  onstop: (() => void) | null = null;
-  constructor(readonly stream: MediaStream, options?: MediaRecorderOptions) { this.mimeType = options?.mimeType ?? ""; FakeMediaRecorder.instances.push(this); }
-  start() { this.state = "recording"; }
-  stop() { if (this.state === "inactive") return; this.state = "inactive"; this.ondataavailable?.({ data: new Blob(["voice"], { type: this.mimeType }) } as BlobEvent); this.onstop?.(); }
+const navigation = vi.hoisted(() => ({ pathname: "/overview" }));
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => navigation.pathname,
+}));
+
+class FakeDataChannel {
+  static instances: FakeDataChannel[] = [];
+  readonly label: string;
+  readyState: RTCDataChannelState = "connecting";
+  onclose: ((event: Event) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent<string>) => void) | null = null;
+  onopen: ((event: Event) => void) | null = null;
+  send = vi.fn();
+  close = vi.fn(() => {
+    this.readyState = "closed";
+  });
+
+  constructor(label: string) {
+    this.label = label;
+    FakeDataChannel.instances.push(this);
+  }
+
+  open() {
+    this.readyState = "open";
+    this.onopen?.(new Event("open"));
+  }
+
+  receive(event: Record<string, unknown>) {
+    this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent<string>);
+  }
 }
 
-class FakeAudio {
-  static instances: FakeAudio[] = [];
-  static rejectNextPlay = false;
-  onended: (() => void) | null = null;
-  onerror: (() => void) | null = null;
+class FakePeerConnection {
+  static instances: FakePeerConnection[] = [];
+  connectionState: RTCPeerConnectionState = "new";
+  localDescription: RTCSessionDescriptionInit | null = null;
+  onconnectionstatechange: ((event: Event) => void) | null = null;
+  ontrack: ((event: RTCTrackEvent) => void) | null = null;
+  readonly channel: FakeDataChannel;
+  addTrack = vi.fn();
+  close = vi.fn(() => {
+    this.connectionState = "closed";
+  });
+  createOffer = vi.fn(async () => ({ type: "offer" as const, sdp: "offer-sdp" }));
+  setLocalDescription = vi.fn(async (description: RTCSessionDescriptionInit) => {
+    this.localDescription = description;
+  });
+  setRemoteDescription = vi.fn(async () => undefined);
+
+  constructor() {
+    this.channel = new FakeDataChannel("oai-events");
+    FakePeerConnection.instances.push(this);
+  }
+
+  createDataChannel = vi.fn((label: string) => {
+    expect(label).toBe("oai-events");
+    return this.channel as unknown as RTCDataChannel;
+  });
+
+  connect() {
+    this.connectionState = "connected";
+    this.onconnectionstatechange?.(new Event("connectionstatechange"));
+  }
+
+  fail() {
+    this.connectionState = "failed";
+    this.onconnectionstatechange?.(new Event("connectionstatechange"));
+  }
+
+  receiveTrack(stream: MediaStream) {
+    this.ontrack?.({ streams: [stream] } as unknown as RTCTrackEvent);
+  }
+}
+
+class FakeSessionDescription {
+  readonly type: RTCSdpType;
+  readonly sdp: string;
+
+  constructor(description: RTCSessionDescriptionInit) {
+    this.type = description.type;
+    this.sdp = description.sdp ?? "";
+  }
+}
+
+class FakeRemoteAudio {
+  static instances: FakeRemoteAudio[] = [];
+  autoplay = false;
+  srcObject: MediaProvider | null = null;
   pause = vi.fn();
-  play: ReturnType<typeof vi.fn>;
-  constructor(readonly src: string) { const rejectPlay = FakeAudio.rejectNextPlay; this.play = vi.fn(() => rejectPlay ? Promise.reject(new Error("Playback blocked")) : Promise.resolve()); FakeAudio.rejectNextPlay = false; FakeAudio.instances.push(this); }
-  finish() { this.onended?.(); }
+  play = vi.fn(async () => undefined);
+
+  constructor() {
+    FakeRemoteAudio.instances.push(this);
+  }
 }
 
-class FakeAnalyser {
-  fftSize = 0;
-  level = 128;
-  getByteTimeDomainData(values: Uint8Array) { values.fill(this.level); }
-}
-
-class FakeAudioContext {
-  static instances: FakeAudioContext[] = [];
-  analyser = new FakeAnalyser();
-  close = vi.fn(() => Promise.resolve());
-  constructor() { FakeAudioContext.instances.push(this); }
-  createAnalyser() { return this.analyser as unknown as AnalyserNode; }
-  createMediaStreamSource() { return { connect: vi.fn() } as unknown as MediaStreamAudioSourceNode; }
-}
-
-const microphoneTrack = { stop: vi.fn() };
-const microphoneStream = { getTracks: () => [microphoneTrack] } as unknown as MediaStream;
-const getUserMedia = vi.fn();
 const fetchMock = vi.fn();
-const rafCallbacks = new Map<number, FrameRequestCallback>();
-let rafId = 0;
+const getUserMedia = vi.fn();
+const localTracks: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
+const remoteTrack = { stop: vi.fn() };
+const remoteStream = { getTracks: () => [remoteTrack] } as unknown as MediaStream;
 
-function voiceResponse() { return new Response(new Blob(["speech"], { type: "audio/mpeg" }), { status: 200, headers: { "content-type": "audio/mpeg" } }); }
-function runAnimationFrame() { const entry = rafCallbacks.entries().next().value as [number, FrameRequestCallback] | undefined; if (!entry) throw new Error("No animation frame was scheduled"); rafCallbacks.delete(entry[0]); entry[1](Date.now()); }
-async function flushMicrotasks() { await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); }); }
-function useControlledTimers() {
-  vi.useFakeTimers();
-  Object.defineProperty(window, "requestAnimationFrame", { configurable: true, value: (callback: FrameRequestCallback) => { const id = ++rafId; rafCallbacks.set(id, callback); return id; } });
-  Object.defineProperty(window, "cancelAnimationFrame", { configurable: true, value: (id: number) => rafCallbacks.delete(id) });
+function createMicrophoneStream() {
+  const track = { stop: vi.fn() };
+  const stream = { getTracks: () => [track] } as unknown as MediaStream;
+  localTracks.push(track);
+  return stream;
 }
 
 function renderControl(overrides: Partial<React.ComponentProps<typeof AssistantVoiceControl>> = {}) {
-  const props = { active: true, onExit: vi.fn(), onReturnToText: vi.fn(), submitTranscript: vi.fn().mockResolvedValue({ text: "Your passbook lists monthly contributions." }), ...overrides };
+  const props = {
+    active: true,
+    onExit: vi.fn(),
+    onReturnToText: vi.fn(),
+    submitTranscript: vi.fn().mockResolvedValue({ text: "Legacy text answer" }),
+    ...overrides,
+  };
   return { ...render(<AssistantVoiceControl {...props} />), props };
 }
 
-async function beginListening(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: "Start listening" }));
-  expect(await screen.findByText("Speaking")).toBeVisible();
-  expect(screen.getByRole("button", { name: "Stop playback" })).toBeVisible();
-  await waitFor(() => expect(FakeAudio.instances).toHaveLength(1));
-  FakeAudio.instances[0]?.finish();
+async function beginRealtimeSession(overrides: Partial<React.ComponentProps<typeof AssistantVoiceControl>> = {}) {
+  const initialFetchCount = fetchMock.mock.calls.length;
+  const view = renderControl(overrides);
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(initialFetchCount + 1));
+  const peer = FakePeerConnection.instances.at(-1)!;
+
+  act(() => {
+    peer.receiveTrack(remoteStream);
+    peer.connect();
+    peer.channel.open();
+  });
+
   expect(await screen.findByText("Listening")).toBeVisible();
+  return { ...view, peer, channel: peer.channel };
 }
 
-describe("AssistantVoiceControl", () => {
+async function beginRealtimeSessionWithFakeTimers() {
+  vi.useFakeTimers();
+  const view = renderControl();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const peer = FakePeerConnection.instances.at(-1)!;
+  act(() => {
+    peer.receiveTrack(remoteStream);
+    peer.connect();
+    peer.channel.open();
+  });
+  expect(screen.getByRole("status")).toHaveTextContent("Listening");
+  return { ...view, peer, channel: peer.channel };
+}
+
+function sentEvents(channel: FakeDataChannel) {
+  return channel.send.mock.calls.map(([payload]) => JSON.parse(payload as string) as Record<string, unknown>);
+}
+
+describe("AssistantVoiceControl Realtime WebRTC mode", () => {
   beforeEach(() => {
-    vi.stubGlobal("MediaRecorder", FakeMediaRecorder); vi.stubGlobal("Audio", FakeAudio); vi.stubGlobal("AudioContext", FakeAudioContext); vi.stubGlobal("fetch", fetchMock);
-    const requestFrame = vi.fn((callback: FrameRequestCallback) => { const id = ++rafId; rafCallbacks.set(id, callback); return id; });
-    const cancelFrame = vi.fn((id: number) => rafCallbacks.delete(id));
-    vi.stubGlobal("requestAnimationFrame", requestFrame); vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-    Object.defineProperty(window, "requestAnimationFrame", { configurable: true, value: requestFrame });
-    Object.defineProperty(window, "cancelAnimationFrame", { configurable: true, value: cancelFrame });
-    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:voice"), revokeObjectURL: vi.fn() });
-    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia } });
-    FakeMediaRecorder.instances = []; FakeMediaRecorder.isTypeSupported.mockReset().mockImplementation((mime) => mime === "audio/webm;codecs=opus"); FakeAudio.instances = []; FakeAudio.rejectNextPlay = false; FakeAudioContext.instances = []; rafCallbacks.clear(); rafId = 0;
-    microphoneTrack.stop.mockReset(); getUserMedia.mockReset().mockResolvedValue(microphoneStream);
-    fetchMock.mockReset().mockImplementation((url: string) => url === "/api/assistant/transcribe" ? Promise.resolve(Response.json({ transcript: "Explain my passbook" })) : Promise.resolve(voiceResponse()));
+    navigation.pathname = "/overview";
+    FakeDataChannel.instances = [];
+    FakePeerConnection.instances = [];
+    FakeRemoteAudio.instances = [];
+    localTracks.length = 0;
+    remoteTrack.stop.mockReset();
+    fetchMock.mockReset().mockImplementation(async () => new Response("answer-sdp", {
+      status: 200,
+      headers: { "content-type": "application/sdp" },
+    }));
+    getUserMedia.mockReset().mockImplementation(async () => createMicrophoneStream());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("RTCPeerConnection", FakePeerConnection);
+    vi.stubGlobal("RTCSessionDescription", FakeSessionDescription);
+    vi.stubGlobal("Audio", FakeRemoteAudio);
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia },
+    });
   });
-  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-  it("presents the current voice state and caption in a compact EPF voice HUD", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps text chat and explicit exit available while the session connects", async () => {
+    getUserMedia.mockImplementation(() => new Promise(() => undefined));
     renderControl();
-    const hud = screen.getByRole("region", { name: "EPF Sahayak voice mode" });
 
-    expect(within(hud).getByRole("img", { name: "EPF Sahayak microphone" })).toBeInTheDocument();
-    expect(within(hud).getByRole("status")).toHaveTextContent("Ready to listen");
-    expect(within(hud).getByRole("group", { name: "Voice caption" })).toHaveTextContent("Speak a question about this page");
-    expect(within(hud).getByRole("group", { name: "Voice controls" })).toBeInTheDocument();
+    expect(await screen.findByText("Connecting")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open text chat" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "End voice mode" })).toBeEnabled();
   });
 
-  it("requests permission before speaking the greeting and starts listening after greeting playback", async () => {
-    const user = userEvent.setup(); renderControl();
-    expect(fetchMock).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Start listening" }));
-    expect(getUserMedia).toHaveBeenCalledWith({ audio: true }); expect(await screen.findByText("Speaking")).toBeVisible(); expect(screen.getByRole("button", { name: "Stop playback" })).toBeVisible(); expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/assistant/speech");
-    FakeAudio.instances[0]?.finish(); expect(await screen.findByText("Listening")).toBeVisible();
+  it("starts one persistent SDP session and attaches streamed remote audio", async () => {
+    const { peer, props } = await beginRealtimeSession();
+
+    expect(getUserMedia).toHaveBeenCalledWith({ audio: true });
+    expect(peer.addTrack).toHaveBeenCalledWith(expect.anything(), expect.anything());
+    expect(fetchMock).toHaveBeenCalledWith("/api/assistant/realtime?route=%2Foverview", {
+      method: "POST",
+      headers: { "content-type": "application/sdp" },
+      body: "offer-sdp",
+      signal: expect.any(AbortSignal),
+    });
+    expect(peer.setRemoteDescription).toHaveBeenCalledWith(expect.objectContaining({
+      type: "answer",
+      sdp: "answer-sdp",
+    }));
+    expect(FakeRemoteAudio.instances[0]).toMatchObject({ autoplay: true, srcObject: remoteStream });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(props.submitTranscript).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.every(([url]) => !String(url).match(/\/(transcribe|speech)$/))).toBe(true);
   });
 
-  it("keeps listening available when greeting playback is rejected", async () => {
-    FakeAudio.rejectNextPlay = true;
-    const user = userEvent.setup(); renderControl();
-    await user.click(screen.getByRole("button", { name: "Start listening" }));
+  it("renders incremental user and assistant captions only after script sanitization", async () => {
+    const { channel } = await beginRealtimeSession();
+    const caption = screen.getByRole("group", { name: "Voice caption" });
+
+    act(() => {
+      channel.receive({ type: "conversation.item.input_audio_transcription.delta", item_id: "member-1", delta: "मेरा " });
+      channel.receive({ type: "conversation.item.input_audio_transcription.delta", item_id: "member-1", delta: "passbook" });
+      channel.receive({ type: "response.output_audio_transcript.delta", item_id: "assistant-1", delta: "Your balance " });
+      channel.receive({ type: "response.output_audio_transcript.delta", item_id: "assistant-1", delta: "is ready." });
+    });
+
+    expect(caption).toHaveTextContent("मेरा passbook");
+    expect(caption).toHaveTextContent("Your balance is ready.");
+    expect(caption.querySelector(".assistant-text-hindi")).toHaveTextContent("मेरा");
+    expect(caption.querySelector(".assistant-text-english")).toHaveTextContent("passbook");
+
+    act(() => {
+      channel.receive({ type: "conversation.item.input_audio_transcription.completed", item_id: "member-1", transcript: "میرا پاس بک" });
+      channel.receive({ type: "response.output_audio_transcript.done", item_id: "assistant-1", transcript: "سلام" });
+    });
+
+    expect(caption).toHaveTextContent("Speech received in an unsupported script. Please speak in English or Hindi.");
+    expect(caption).not.toHaveTextContent("میرا پاس بک");
+    expect(caption).not.toHaveTextContent("سلام");
+  });
+
+  it("maps streamed audio lifecycle events and allows speech or a control to interrupt output", async () => {
+    const { channel } = await beginRealtimeSession();
+
+    act(() => channel.receive({ type: "output_audio_buffer.started", response_id: "response-1" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Speaking");
+
+    act(() => channel.receive({ type: "input_audio_buffer.speech_started", item_id: "member-2" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Listening");
+
+    act(() => channel.receive({ type: "output_audio_buffer.started", response_id: "response-2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop playback" }));
+
+    expect(sentEvents(channel)).toEqual(expect.arrayContaining([
+      { type: "response.cancel" },
+      { type: "output_audio_buffer.clear" },
+    ]));
+    expect(screen.getByRole("status")).toHaveTextContent("Listening");
+
+    act(() => channel.receive({ type: "output_audio_buffer.stopped", response_id: "response-2" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Listening");
+  });
+
+  it("sends a compact session update when the portal pathname changes", async () => {
+    const { channel, props, rerender } = await beginRealtimeSession();
+    expect(channel.send).not.toHaveBeenCalled();
+
+    navigation.pathname = "/claims";
+    rerender(<AssistantVoiceControl {...props} />);
+
+    await waitFor(() => expect(channel.send).toHaveBeenCalledTimes(1));
+    expect(sentEvents(channel)).toEqual([{
+      type: "session.update",
+      session: {
+        type: "realtime",
+        instructions: "The member is now viewing portal route /claims. Keep responses grounded in this screen.",
+      },
+    }]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses one fresh SDP reconnect and exposes text fallback after the second peer failure", async () => {
+    const { peer } = await beginRealtimeSession();
+
+    act(() => peer.fail());
+    expect(await screen.findByText("Reconnecting")).toBeVisible();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    const replacement = FakePeerConnection.instances[1]!;
+    act(() => {
+      replacement.connect();
+      replacement.channel.open();
+    });
     expect(await screen.findByText("Listening")).toBeVisible();
-    expect(screen.getByText("I could not play the greeting. You can start speaking when you are ready.")).toBeVisible();
+
+    act(() => replacement.fail());
+    expect(await screen.findByRole("alert")).toHaveTextContent("reconnect");
+    expect(screen.getByRole("status")).toHaveTextContent("Voice needs attention");
+    expect(screen.getByRole("button", { name: "Open text chat" })).toBeEnabled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("cleans greeting playback errors and continues to listening", async () => {
-    const user = userEvent.setup(); renderControl(); await user.click(screen.getByRole("button", { name: "Start listening" }));
-    expect(await screen.findByText("Speaking")).toBeVisible(); FakeAudio.instances[0]?.onerror?.();
-    expect(await screen.findByText("Listening")).toBeVisible(); expect(FakeAudio.instances[0]?.pause).toHaveBeenCalled(); expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:voice");
+  it("does not negotiate when microphone permission is denied", async () => {
+    getUserMedia.mockRejectedValue(new DOMException("Denied", "NotAllowedError"));
+    renderControl();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Microphone permission was denied");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Open text chat" })).toBeEnabled();
   });
 
-  it("stops a recorded turn after speech is followed by 1.2 seconds of silence", async () => {
-    useControlledTimers(); renderControl(); fireEvent.click(screen.getByRole("button", { name: "Start listening" })); await flushMicrotasks(); expect(screen.getByText("Speaking")).toBeVisible(); await act(async () => { FakeAudio.instances[0]?.finish(); }); expect(screen.getByText("Listening")).toBeVisible();
-    const recorder = FakeMediaRecorder.instances[0]!; const analyser = FakeAudioContext.instances[0]!.analyser; expect(rafCallbacks.size).toBeGreaterThan(0);
-    analyser.level = 148; runAnimationFrame(); analyser.level = 128; runAnimationFrame(); expect(recorder.state).toBe("recording"); vi.advanceTimersByTime(1_200); runAnimationFrame();
-    expect(recorder.state).toBe("inactive");
+  it("closes local and remote tracks, data channel, audio, and peer on exit", async () => {
+    const onExit = vi.fn();
+    const { peer } = await beginRealtimeSession({ onExit });
+
+    fireEvent.click(screen.getByRole("button", { name: "End voice mode" }));
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(localTracks[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(remoteTrack.stop).toHaveBeenCalledTimes(1);
+    expect(peer.channel.close).toHaveBeenCalledTimes(1);
+    expect(peer.close).toHaveBeenCalledTimes(1);
+    expect(FakeRemoteAudio.instances[0]?.pause).toHaveBeenCalledTimes(1);
+    expect(FakeRemoteAudio.instances[0]?.srcObject).toBeNull();
   });
 
-  it("stops a listening turn at the 30 second maximum", async () => {
-    useControlledTimers(); renderControl(); fireEvent.click(screen.getByRole("button", { name: "Start listening" })); await flushMicrotasks(); await act(async () => { FakeAudio.instances[0]?.finish(); }); const recorder = FakeMediaRecorder.instances[0]!;
-    vi.advanceTimersByTime(30_000);
-    expect(recorder.state).toBe("inactive");
+  it("tears down the session on logout-style deactivation and unmount", async () => {
+    const first = await beginRealtimeSession();
+    first.rerender(<AssistantVoiceControl {...first.props} active={false} />);
+
+    await waitFor(() => expect(first.peer.close).toHaveBeenCalledTimes(1));
+    expect(first.peer.channel.close).toHaveBeenCalledTimes(1);
+    expect(localTracks[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toHaveTextContent("Ready for voice");
+
+    first.unmount();
+    const second = await beginRealtimeSession();
+    second.unmount();
+    expect(second.peer.close).toHaveBeenCalledTimes(1);
+    expect(second.peer.channel.close).toHaveBeenCalledTimes(1);
+    expect(localTracks[1]?.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("transcribes the actual recording, submits its transcript with a signal, and plays one answer", async () => {
-    const user = userEvent.setup(); const { props } = renderControl(); await beginListening(user); await user.click(screen.getByRole("button", { name: "Stop listening" }));
-    expect(await screen.findByText("Explain my passbook")).toBeVisible(); expect(props.submitTranscript).toHaveBeenCalledWith("Explain my passbook", expect.any(AbortSignal)); expect(screen.getByText("Your passbook lists monthly contributions.")).toBeVisible(); expect(screen.getByText("Speaking")).toBeVisible(); expect(FakeAudio.instances).toHaveLength(2);
-    const transcription = fetchMock.mock.calls.find(([url]) => url === "/api/assistant/transcribe"); const uploaded = (transcription?.[1] as RequestInit).body as FormData; const file = uploaded.get("audio") as File;
-    expect(file.type).toBe("audio/webm;codecs=opus"); expect(file.name).toBe("voice-turn.webm"); const speech = fetchMock.mock.calls.at(-1)!; expect(speech[0]).toBe("/api/assistant/speech"); expect(JSON.parse((speech[1] as RequestInit).body as string)).toEqual({ text: "Your passbook lists monthly contributions." });
+  it("closes an inactive Realtime session after ten minutes", async () => {
+    const { peer } = await beginRealtimeSessionWithFakeTimers();
+
+    act(() => vi.advanceTimersByTime(10 * 60 * 1_000));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("10 minutes without activity");
+    expect(peer.channel.close).toHaveBeenCalledTimes(1);
+    expect(peer.close).toHaveBeenCalledTimes(1);
   });
 
-  it("uses MP4 for the upload when it is the supported recording format", async () => {
-    FakeMediaRecorder.isTypeSupported.mockImplementation((mime) => mime === "audio/mp4"); const user = userEvent.setup(); renderControl(); await beginListening(user); await user.click(screen.getByRole("button", { name: "Stop listening" })); await screen.findByText("Explain my passbook");
-    const transcription = fetchMock.mock.calls.find(([url]) => url === "/api/assistant/transcribe"); const file = ((transcription?.[1] as RequestInit).body as FormData).get("audio") as File;
-    expect(file.type).toBe("audio/mp4"); expect(file.name).toBe("voice-turn.mp4");
+  it("closes an active Realtime session at the thirty-minute total limit", async () => {
+    const { channel, peer } = await beginRealtimeSessionWithFakeTimers();
+
+    for (let interval = 0; interval < 3; interval += 1) {
+      act(() => vi.advanceTimersByTime(9 * 60 * 1_000));
+      act(() => channel.receive({ type: "session.updated" }));
+    }
+    act(() => vi.advanceTimersByTime(3 * 60 * 1_000));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("30-minute limit");
+    expect(peer.channel.close).toHaveBeenCalledTimes(1);
+    expect(peer.close).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects a recorder with no supported WebM or MP4 MIME type", async () => {
-    FakeMediaRecorder.isTypeSupported.mockReturnValue(false); const user = userEvent.setup(); renderControl(); await user.click(screen.getByRole("button", { name: "Start listening" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Voice recording is not supported"); expect(getUserMedia).not.toHaveBeenCalled();
-  });
+  it("surfaces protocol errors without hiding the text-chat exit", async () => {
+    const { channel } = await beginRealtimeSession();
 
-  it("aborts the assistant request and resets to idle when voice mode becomes inactive", async () => {
-    let resolveAnswer: ((answer: { text: string }) => void) | undefined;
-    const submitTranscript = vi.fn((_text: string, signal?: AbortSignal) => new Promise<{ text: string }>((resolve) => { resolveAnswer = resolve; signal?.addEventListener("abort", () => undefined); }));
-    const user = userEvent.setup(); const { rerender } = render(<AssistantVoiceControl active onExit={vi.fn()} onReturnToText={vi.fn()} submitTranscript={submitTranscript} />); await beginListening(user); await user.click(screen.getByRole("button", { name: "Stop listening" })); expect(await screen.findByText("Thinking")).toBeVisible(); const signal = submitTranscript.mock.calls[0]?.[1] as AbortSignal;
-    rerender(<AssistantVoiceControl active={false} onExit={vi.fn()} onReturnToText={vi.fn()} submitTranscript={submitTranscript} />); resolveAnswer?.({ text: "Late answer" });
-    expect(signal.aborted).toBe(true); expect(screen.getByText("Ready to listen")).toBeVisible(); expect(screen.getByRole("button", { name: "Start listening" })).toBeDisabled(); await Promise.resolve(); expect(screen.queryByText("Late answer")).not.toBeInTheDocument();
-  });
+    act(() => channel.receive({
+      type: "error",
+      error: { type: "server_error", message: "Internal Realtime failure" },
+    }));
 
-  it("aborts an in-flight transcription request when voice mode exits", async () => {
-    let transcriptionSignal: AbortSignal | undefined;
-    fetchMock.mockImplementation((url: string, init?: RequestInit) => url === "/api/assistant/transcribe"
-      ? new Promise(() => { transcriptionSignal = init?.signal as AbortSignal; })
-      : Promise.resolve(voiceResponse()));
-    const user = userEvent.setup(); renderControl(); await beginListening(user); await user.click(screen.getByRole("button", { name: "Stop listening" }));
-    expect(await screen.findByText("Transcribing")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "End voice mode" }));
-    expect(transcriptionSignal?.aborted).toBe(true);
-  });
-
-  it("lifecycle cleanup cancels listening resources on deactivation and unmount without manual stop", async () => {
-    const clearTimer = vi.spyOn(globalThis, "clearTimeout");
-    const user = userEvent.setup(); const { rerender, unmount } = renderControl(); await beginListening(user);
-    rerender(<AssistantVoiceControl active={false} onExit={vi.fn()} onReturnToText={vi.fn()} submitTranscript={vi.fn()} />);
-    expect(FakeMediaRecorder.instances[0]?.state).toBe("inactive"); expect(microphoneTrack.stop).toHaveBeenCalled(); expect(clearTimer).toHaveBeenCalled(); expect(rafCallbacks.size).toBe(0); expect(FakeAudioContext.instances[0]?.close).toHaveBeenCalled();
-    unmount();
-  });
-
-  it("exit cancels listening resources without a preceding manual stop", async () => {
-    const onExit = vi.fn(); const user = userEvent.setup(); renderControl({ onExit }); await beginListening(user);
-    await user.click(screen.getByRole("button", { name: "End voice mode" }));
-    expect(onExit).toHaveBeenCalledTimes(1); expect(FakeMediaRecorder.instances[0]?.state).toBe("inactive"); expect(microphoneTrack.stop).toHaveBeenCalled(); expect(rafCallbacks.size).toBe(0); expect(FakeAudioContext.instances[0]?.close).toHaveBeenCalled();
-  });
-
-  it("unmount cleanup cancels active listening without deactivation or exit", async () => {
-    const clearTimer = vi.spyOn(globalThis, "clearTimeout");
-    const user = userEvent.setup(); const { unmount } = renderControl(); await beginListening(user);
-    unmount();
-    expect(FakeMediaRecorder.instances[0]?.state).toBe("inactive"); expect(microphoneTrack.stop).toHaveBeenCalled(); expect(clearTimer).toHaveBeenCalled(); expect(rafCallbacks.size).toBe(0); expect(FakeAudioContext.instances[0]?.close).toHaveBeenCalled();
-  });
-
-  it("cancels the permission-acquired stream when voice mode exits during the greeting", async () => {
-    const user = userEvent.setup(); renderControl(); await user.click(screen.getByRole("button", { name: "Start listening" }));
-    expect(await screen.findByText("Speaking")).toBeVisible(); await user.click(screen.getByRole("button", { name: "End voice mode" }));
-    expect(microphoneTrack.stop).toHaveBeenCalled(); expect(FakeMediaRecorder.instances).toHaveLength(0);
-  });
-
-  it("aborts pending speech when playback is stopped and ignores its late response", async () => {
-    let pendingSpeechSignal: AbortSignal | undefined;
-    let resolvePendingSpeech: ((response: Response) => void) | undefined;
-    let speechCalls = 0;
-    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
-      if (url === "/api/assistant/transcribe") return Promise.resolve(Response.json({ transcript: "Explain my passbook" }));
-      speechCalls += 1;
-      if (speechCalls === 1) return Promise.resolve(voiceResponse());
-      return new Promise<Response>((resolve) => { pendingSpeechSignal = init?.signal as AbortSignal; resolvePendingSpeech = resolve; });
-    });
-    const user = userEvent.setup(); renderControl(); await beginListening(user); await user.click(screen.getByRole("button", { name: "Stop listening" })); expect(await screen.findByText("Speaking")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Stop playback" })); resolvePendingSpeech?.(voiceResponse()); await Promise.resolve(); await Promise.resolve();
-    expect(pendingSpeechSignal?.aborted).toBe(true); expect(FakeAudio.instances).toHaveLength(1); expect(screen.getByText("Ready to listen")).toBeVisible();
-  });
-
-  it("exit aborts pending speech synthesis and ignores its late response", async () => {
-    let pendingSpeechSignal: AbortSignal | undefined;
-    let resolvePendingSpeech: ((response: Response) => void) | undefined;
-    let speechCalls = 0;
-    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
-      if (url === "/api/assistant/transcribe") return Promise.resolve(Response.json({ transcript: "Explain my passbook" }));
-      speechCalls += 1;
-      if (speechCalls === 1) return Promise.resolve(voiceResponse());
-      return new Promise<Response>((resolve) => { pendingSpeechSignal = init?.signal as AbortSignal; resolvePendingSpeech = resolve; });
-    });
-    const user = userEvent.setup(); renderControl(); await beginListening(user); await user.click(screen.getByRole("button", { name: "Stop listening" })); expect(await screen.findByText("Speaking")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "End voice mode" })); resolvePendingSpeech?.(voiceResponse()); await Promise.resolve(); await Promise.resolve();
-    expect(pendingSpeechSignal?.aborted).toBe(true); expect(FakeAudio.instances).toHaveLength(1);
-  });
-
-  it("unmount cleanup aborts pending speech synthesis before it can create playback", async () => {
-    let pendingSpeechSignal: AbortSignal | undefined;
-    let resolvePendingSpeech: ((response: Response) => void) | undefined;
-    let speechCalls = 0;
-    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
-      if (url === "/api/assistant/transcribe") return Promise.resolve(Response.json({ transcript: "Explain my passbook" }));
-      speechCalls += 1;
-      if (speechCalls === 1) return Promise.resolve(voiceResponse());
-      return new Promise<Response>((resolve) => { pendingSpeechSignal = init?.signal as AbortSignal; resolvePendingSpeech = resolve; });
-    });
-    const user = userEvent.setup(); const { unmount } = renderControl(); await beginListening(user); await user.click(screen.getByRole("button", { name: "Stop listening" })); expect(await screen.findByText("Speaking")).toBeVisible();
-    unmount(); resolvePendingSpeech?.(voiceResponse()); await Promise.resolve(); await Promise.resolve();
-    expect(pendingSpeechSignal?.aborted).toBe(true); expect(FakeAudio.instances).toHaveLength(1); expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:voice");
-  });
-
-  it("uses the latest submit callback after a rerender without restarting the active recorder", async () => {
-    const oldSubmit = vi.fn().mockResolvedValue({ text: "Old answer" });
-    const latestSubmit = vi.fn().mockResolvedValue({ text: "Latest answer" });
-    const user = userEvent.setup(); const { rerender } = render(<AssistantVoiceControl active onExit={vi.fn()} onReturnToText={vi.fn()} submitTranscript={oldSubmit} />); await beginListening(user);
-    rerender(<AssistantVoiceControl active onExit={vi.fn()} onReturnToText={vi.fn()} submitTranscript={latestSubmit} />); await user.click(screen.getByRole("button", { name: "Stop listening" }));
-    expect(await screen.findByText("Latest answer")).toBeVisible(); expect(latestSubmit).toHaveBeenCalledWith("Explain my passbook", expect.any(AbortSignal)); expect(oldSubmit).not.toHaveBeenCalled();
-  });
-
-  it("cleans playback, URLs, RAF, timers, and audio context on exit and unmount", async () => {
-    const user = userEvent.setup(); const { unmount } = renderControl(); await beginListening(user); await user.click(screen.getByRole("button", { name: "Stop listening" })); await screen.findByText("Speaking"); const answerAudio = FakeAudio.instances[1]!;
-    await user.click(screen.getByRole("button", { name: "End voice mode" }));
-    expect(answerAudio.pause).toHaveBeenCalled(); expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:voice"); expect(cancelAnimationFrame).toHaveBeenCalled(); expect(FakeAudioContext.instances[0]?.close).toHaveBeenCalled(); expect(microphoneTrack.stop).toHaveBeenCalled(); unmount();
-  });
-
-  it("cleans audio before reporting a rejected playback", async () => {
-    const user = userEvent.setup(); renderControl(); await beginListening(user); FakeAudio.rejectNextPlay = true; await user.click(screen.getByRole("button", { name: "Stop listening" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Playback blocked"); expect(FakeAudio.instances[1]?.pause).toHaveBeenCalled(); expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:voice");
+    const hud = screen.getByRole("region", { name: "EPF Sahayak voice mode" });
+    expect(within(hud).getByRole("status")).toHaveTextContent("Voice needs attention");
+    expect(within(hud).getByRole("alert")).toHaveTextContent("Realtime voice needs attention");
+    expect(within(hud).getByRole("button", { name: "Open text chat" })).toBeEnabled();
+    expect(within(hud).getByRole("button", { name: "End voice mode" })).toBeEnabled();
   });
 });
