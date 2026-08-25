@@ -195,6 +195,7 @@ describe("AssistantPanel voice integration", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
     const dialog = await screen.findByRole("dialog", { name: "EPF Sahayak conversation" });
+    await within(dialog).findByText("मेरा", { exact: true });
     const messageContent = dialog.querySelectorAll(".assistant-message-content");
     expect(messageContent[0]?.querySelector(".assistant-text-hindi")).toHaveTextContent("मेरा");
     expect(messageContent[0]?.querySelector(".assistant-text-english")).toHaveTextContent("passbook");

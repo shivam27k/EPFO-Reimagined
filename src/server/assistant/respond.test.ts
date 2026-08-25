@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 
 import { createDemoRun } from "@/db/demo-runs";
 import { getDb } from "@/db/client";
-import { demoUsers } from "@/db/schema";
+import { demoUsers, employments } from "@/db/schema";
 import { DEMO_CREDENTIALS, seedAllDemoUsers } from "@/db/seed-data";
 import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "@/test/factories";
 import { buildAssistantContext } from "./context";
@@ -40,6 +40,20 @@ describe("assistant response grounding", () => {
     expect(serialized).not.toContain("1012 3456 7890");
     expect(serialized).not.toContain("PYBOM00424890000012345");
     expect(serialized).not.toContain(demoRunId);
+  });
+
+  test("employment screen state reflects a recorded exit instead of static missing-exit copy", async () => {
+    await getDb()
+      .update(employments)
+      .set({ exitedAt: "2027-01-31" })
+      .where(eq(employments.demoRunId, demoRunId));
+
+    const context = await buildAssistantContext({ demoRunId, route: "/employment" });
+
+    expect(context.screen.purpose).not.toMatch(/resolve a missing exit date/i);
+    expect(context.screen.currentState).toBe("Employment record complete");
+    expect(context.screen.visibleFacts).toContain("All employment records have a recorded exit date.");
+    expect(context.screen.visibleFacts).toContain("Exit date on the latest record: 2027-01-31.");
   });
 
   test("expresses assistant monetary amounts exactly as displayed by the portal", async () => {

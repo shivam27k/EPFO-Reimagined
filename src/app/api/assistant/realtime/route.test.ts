@@ -15,7 +15,7 @@ vi.mock("@/server/assistant/realtime", () => ({
   createRealtimeCall,
 }));
 
-import { GET, POST } from "./route";
+import { GET, POST, PUT } from "./route";
 
 function realtimeRequest({
   body = "v=0\r\na=offer\r\n",
@@ -192,5 +192,40 @@ describe("GET /api/assistant/realtime", () => {
     expect(JSON.stringify(payload)).not.toContain("must-not-cross-boundary");
     expect(buildRealtimeSessionConfig).toHaveBeenCalledWith({ demoRunId: "run-1", route: "/claims" });
     expect(createRealtimeCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("PUT /api/assistant/realtime", () => {
+  it("refreshes instructions using the authenticated rendered-screen digest", async () => {
+    const instructions = "Current masked portal context (synthetic data only): rendered screen";
+    buildRealtimeSessionConfig.mockResolvedValue({ instructions });
+
+    const response = await PUT(new Request("http://localhost/api/assistant/realtime", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        route: "/employment",
+        visibleScreenText: "Employment record complete\nDate of exit 2027-01-31",
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ instructions });
+    expect(buildRealtimeSessionConfig).toHaveBeenCalledWith({
+      demoRunId: "run-1",
+      route: "/employment",
+      visibleScreenText: "Employment record complete\nDate of exit 2027-01-31",
+    });
+  });
+
+  it("rejects oversized rendered-screen context", async () => {
+    const response = await PUT(new Request("http://localhost/api/assistant/realtime", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ route: "/employment", visibleScreenText: "x".repeat(6001) }),
+    }));
+
+    expect(response.status).toBe(422);
+    expect(buildRealtimeSessionConfig).not.toHaveBeenCalled();
   });
 });

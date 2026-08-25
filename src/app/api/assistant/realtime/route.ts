@@ -1,11 +1,16 @@
 import { AuthenticationError, requireCurrentRun } from "@/server/auth/session";
 import { buildRealtimeSessionConfig, createRealtimeCall } from "@/server/assistant/realtime";
+import { z, ZodError } from "zod";
 
 const SDP_MEDIA_TYPE = "application/sdp";
 const MAX_SDP_BYTES = 64 * 1024;
 const MAX_ROUTE_LENGTH = 120;
 const ROUTE_BASE_URL = "http://realtime-route.local";
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+const contextRefreshSchema = z.object({
+  route: z.string().min(1).max(MAX_ROUTE_LENGTH),
+  visibleScreenText: z.string().max(6000),
+});
 
 function mediaType(request: Request): string {
   return request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -75,6 +80,35 @@ export async function GET(request: Request) {
       { headers: { "cache-control": "no-store" } },
     );
   } catch (error) {
+    return routeFailure(error);
+  }
+}
+
+export async function PUT(request: Request) {
+  try {
+    const current = await requireCurrentRun();
+    const input = contextRefreshSchema.parse(await request.json());
+    if (!isSameOriginPathname(input.route)) return routeValidationError();
+
+    const config = await buildRealtimeSessionConfig({
+      demoRunId: current.demoRun.id,
+      route: input.route,
+      visibleScreenText: input.visibleScreenText,
+    });
+    if (typeof config.instructions !== "string" || !config.instructions.trim()) {
+      throw new Error("Realtime instructions are unavailable.");
+    }
+    return Response.json(
+      { instructions: config.instructions },
+      { headers: { "cache-control": "no-store" } },
+    );
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return Response.json({ error: "Use valid rendered-screen context." }, { status: 422 });
+    }
+    if (error instanceof SyntaxError) {
+      return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
+    }
     return routeFailure(error);
   }
 }

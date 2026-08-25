@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { containsForbiddenScript } from "./assistant-language";
+import { captureVisibleScreenText, visibleScreenFingerprint } from "./visible-screen-context";
 
 export type AssistantVoiceState = "CONNECTING" | "LISTENING" | "SPEAKING" | "RECONNECTING" | "ERROR" | "IDLE";
 export type AssistantVoiceCaption = { role: "member" | "assistant"; text: string };
@@ -70,6 +71,10 @@ function contextKey(route: string, contextVersion: string): string {
   return JSON.stringify([route, contextVersion]);
 }
 
+function contextVersionWithVisibleScreen(contextVersion: string, visibleVersion: string): string {
+  return visibleVersion ? `${contextVersion}:${visibleVersion}` : contextVersion;
+}
+
 function roleFromRealtimeItem(item: unknown): CaptionRole | null {
   if (typeof item !== "object" || item === null) return null;
   const role = (item as Record<string, unknown>).role;
@@ -120,6 +125,7 @@ export function useAssistantVoice({
   const [answer, setAnswer] = useState("");
   const [captionItems, setCaptionItems] = useState<CaptionItem[]>([]);
   const [error, setError] = useState("");
+  const [visibleScreenVersion, setVisibleScreenVersion] = useState("");
   const activeRef = useRef(active);
   const routeRef = useRef(route);
   const contextVersionRef = useRef(contextVersion);
@@ -311,9 +317,13 @@ export function useAssistantVoice({
     const generation = generationRef.current;
 
     try {
-      const response = await fetch(`/api/assistant/realtime?route=${encodeURIComponent(nextRoute)}`, {
-        method: "GET",
-        headers: { accept: "application/json" },
+      const response = await fetch("/api/assistant/realtime", {
+        method: "PUT",
+        headers: { accept: "application/json", "content-type": "application/json" },
+        body: JSON.stringify({
+          route: nextRoute,
+          visibleScreenText: captureVisibleScreenText(),
+        }),
         signal: controller.signal,
       });
       if (response.status === 401) throw new Error("AUTHENTICATION_REQUIRED");
@@ -475,7 +485,11 @@ export function useAssistantVoice({
         clearSetupTimer();
         setState("LISTENING");
         resetIdleTimer();
-        const currentKey = contextKey(routeRef.current, contextVersionRef.current);
+        const visibleText = captureVisibleScreenText();
+        const currentKey = contextKey(routeRef.current, contextVersionWithVisibleScreen(
+          contextVersionRef.current,
+          visibleText ? visibleScreenFingerprint(visibleText) : "",
+        ));
         if (currentKey !== appliedContextKeyRef.current) {
           void refreshContext(routeRef.current, currentKey);
         }
@@ -552,10 +566,39 @@ export function useAssistantVoice({
   useEffect(() => {
     routeRef.current = route;
     contextVersionRef.current = contextVersion;
-    const nextContextKey = contextKey(route, contextVersion);
+    const nextContextKey = contextKey(
+      route,
+      contextVersionWithVisibleScreen(contextVersion, visibleScreenVersion),
+    );
     if (!active || nextContextKey === appliedContextKeyRef.current) return;
     void refreshContext(route, nextContextKey);
-  }, [active, contextVersion, refreshContext, route]);
+  }, [active, contextVersion, refreshContext, route, visibleScreenVersion]);
+
+  useEffect(() => {
+    if (!active) return;
+    const root = document.getElementById("portal-content");
+    if (!root) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const updateVersion = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        setVisibleScreenVersion(visibleScreenFingerprint(captureVisibleScreenText()));
+      }, 120);
+    };
+    updateVersion();
+    const observer = new MutationObserver(updateVersion);
+    observer.observe(root, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ["open", "hidden", "aria-expanded", "aria-invalid"],
+    });
+    return () => {
+      observer.disconnect();
+      if (timer) clearTimeout(timer);
+    };
+  }, [active, route]);
 
   useEffect(() => {
     activeRef.current = active;

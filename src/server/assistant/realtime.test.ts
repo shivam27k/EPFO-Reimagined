@@ -80,6 +80,21 @@ describe("Realtime assistant session configuration", () => {
     expect(instructions).not.toContain(demoRunId);
   });
 
+  it("treats sanitized currently rendered page text as authoritative over stale metadata", async () => {
+    const config = await buildRealtimeSessionConfig({
+      demoRunId,
+      route: "/employment",
+      visibleScreenText: "Employment record complete\nDate of exit\n2027-01-31\nAccount 123456789012",
+    });
+    const instructions = String(config.instructions);
+
+    expect(instructions).toContain("authoritative current rendering");
+    expect(instructions).toContain("Employment record complete");
+    expect(instructions).toContain("2027-01-31");
+    expect(instructions).toContain("[masked account or identity number]");
+    expect(instructions).not.toContain("123456789012");
+  });
+
   it("projects simulation context without structural database identifiers", async () => {
     const simulationId = `${demoRunId}:realtime-time-advance`;
     await getDb().insert(simulationEvents).values({

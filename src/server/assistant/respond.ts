@@ -33,8 +33,18 @@ function fallbackText(context: Awaited<ReturnType<typeof buildAssistantContext>>
   return `${summary} This is based on the stored synthetic member state.`;
 }
 
-export async function respondToMember({ demoRunId, route, message }: { demoRunId: string; route: string; message: string }): Promise<AssistantReply> {
-  const context = await buildAssistantContext({ demoRunId, route });
+export async function respondToMember({
+  demoRunId,
+  route,
+  message,
+  visibleScreenText,
+}: {
+  demoRunId: string;
+  route: string;
+  message: string;
+  visibleScreenText?: string;
+}): Promise<AssistantReply> {
+  const context = await buildAssistantContext({ demoRunId, route, visibleScreenText });
   const intent = detectIntent(message, route);
 
   if (intent.confidence < LOW_CONFIDENCE_THRESHOLD) {
@@ -96,6 +106,7 @@ export async function respondToMember({ demoRunId, route, message }: { demoRunId
         memberQuestion: message,
         currentRoute: context.route,
         currentScreen: context.screen,
+        currentlyRenderedScreen: context.renderedScreen,
         maskedSyntheticMemberState: context.maskedModelSnapshot,
         deterministicFindings: context.findings,
         activeProcess: context.activeProcess,

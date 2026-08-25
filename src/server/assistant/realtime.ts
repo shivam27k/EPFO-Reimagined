@@ -56,19 +56,27 @@ function extractCallId(location: string | null): string | undefined {
 export async function buildRealtimeSessionConfig({
   demoRunId,
   route,
+  visibleScreenText,
 }: {
   demoRunId: string;
   route: string;
+  visibleScreenText?: string;
 }): Promise<Record<string, unknown>> {
-  const context = await buildAssistantContext({ demoRunId, route });
+  const context = await buildAssistantContext({ demoRunId, route, visibleScreenText });
   const maskedMember = asRecord(context.maskedModelSnapshot);
   const maskedScreenContext = {
     route: context.route,
     screen: {
       name: context.screen.name,
       purpose: context.screen.purpose,
+      currentState: context.screen.currentState,
+      visibleFacts: context.screen.visibleFacts,
       ...(context.screen.officialTerm ? { officialTerm: context.screen.officialTerm } : {}),
     },
+    renderedScreen: context.renderedScreen ? {
+      ...context.renderedScreen,
+      authority: "authoritative current rendering",
+    } : null,
     member: {
       persona: maskedMember.persona,
       profile: projectRecord(maskedMember.profile, ["uanMasked", "onboardingComplete"]),

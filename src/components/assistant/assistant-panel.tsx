@@ -18,6 +18,7 @@ import { AssistantMessage } from "./assistant-message";
 import { AssistantVoiceControl, type AssistantVoiceCaption } from "./assistant-voice-control";
 import { FormPatchReview } from "./form-patch-review";
 import { ProactivePrompt, type ProactivePromptModel } from "./proactive-prompt";
+import { captureVisibleScreenText } from "./visible-screen-context";
 
 interface Message {
   role: "member" | "assistant";
@@ -192,7 +193,7 @@ export function AssistantPanel({
     if (!voiceActive) openAssistant();
     setMessages((current) => [...current, { role: "member", text: trimmed }]);
     try {
-      const response = await fetch("/api/assistant", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: trimmed, route: pathname }), signal });
+      const response = await fetch("/api/assistant", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: trimmed, route: pathname, visibleScreenText: captureVisibleScreenText() }), signal });
       const result = await readJson(response);
       if (signal?.aborted) return null;
       if (!response.ok) throw new Error(String(result.error ?? "Assistant response could not be loaded."));

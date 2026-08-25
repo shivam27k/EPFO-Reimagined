@@ -185,7 +185,7 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
     localTracks.length = 0;
     remoteTrack.stop.mockReset();
     fetchMock.mockReset().mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === "GET") return Response.json({ instructions: fullClaimsInstructions });
+      if (init?.method === "GET" || init?.method === "PUT") return Response.json({ instructions: fullClaimsInstructions });
       return new Response("answer-sdp", {
         status: 200,
         headers: { "content-type": "application/sdp" },
@@ -348,9 +348,10 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
     rerender(<AssistantVoiceControl {...props} route="/claims" />);
 
     await waitFor(() => expect(channel.send).toHaveBeenCalledTimes(1));
-    expect(fetchMock).toHaveBeenCalledWith("/api/assistant/realtime?route=%2Fclaims", {
-      method: "GET",
-      headers: { accept: "application/json" },
+    expect(fetchMock).toHaveBeenCalledWith("/api/assistant/realtime", {
+      method: "PUT",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({ route: "/claims", visibleScreenText: "" }),
       signal: expect.any(AbortSignal),
     });
     expect(sentEvents(channel)).toEqual([{

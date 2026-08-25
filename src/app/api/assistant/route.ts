@@ -14,6 +14,7 @@ import {
 const assistantRequestSchema = z.object({
   message: z.string().min(1).max(1000),
   route: z.string().min(1).max(120),
+  visibleScreenText: z.string().max(6000).optional(),
 });
 
 const assistantStateSchema = z.discriminatedUnion("kind", [
@@ -47,6 +48,7 @@ export async function POST(request: Request) {
       demoRunId: current.demoRun.id,
       route: input.route,
       message: safeMessage,
+      visibleScreenText: input.visibleScreenText,
     });
     await storeAssistantExchange(current.demoRun.id, safeMessage, reply);
     return Response.json(reply);

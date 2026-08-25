@@ -1,7 +1,7 @@
 import { getMemberSnapshot } from "@/server/repositories/member-repository";
 import { processDefinitions } from "@/domain/process-definitions";
 import { calculatePostedEpfBalance } from "@/domain/epf-balance";
-import { getAssistantState } from "./assistant-store";
+import { getAssistantState, sanitizeMemberMessage } from "./assistant-store";
 
 export interface AssistantContext {
   route: string;
@@ -9,7 +9,10 @@ export interface AssistantContext {
     name: string;
     purpose: string;
     officialTerm?: string;
+    currentState: string;
+    visibleFacts: string[];
   };
+  renderedScreen: null | { source: "current-rendered-page"; text: string };
   snapshot: Awaited<ReturnType<typeof getMemberSnapshot>>;
   findings: Awaited<ReturnType<typeof getMemberSnapshot>>["findings"];
   maskedModelSnapshot: Record<string, unknown>;
@@ -24,7 +27,7 @@ const screenCatalog = [
   { path: "/claims/pension", name: "Monthly pension readiness", purpose: "Explain Form 10D pension categories and readiness.", officialTerm: "Monthly pension · Form 10D" },
   { path: "/claims", name: "Final settlement", purpose: "Check, submit, or track the fictional full PF withdrawal journey.", officialTerm: "Final settlement · Form 19" },
   { path: "/employment/mark-exit", name: "Mark employment exit", purpose: "Record a fictional employment exit after checking the date, reason, authentication, and consequences.", officialTerm: "Member-side Mark Exit" },
-  { path: "/employment", name: "Employment history", purpose: "Review service records and resolve a missing exit date.", officialTerm: "UAN-linked service records" },
+  { path: "/employment", name: "Employment history", purpose: "Review service records and determine whether an exit-date update is needed.", officialTerm: "UAN-linked service records" },
   { path: "/transfers/annexure-k", name: "Annexure K", purpose: "Explain the transfer certificate, its status, and the records it contains.", officialTerm: "Transfer Certificate · Annexure K" },
   { path: "/transfers", name: "Transfer service", purpose: "Check readiness to move previous EPF service into the current account.", officialTerm: "Transfer claim · Form 13 / auto-transfer" },
   { path: "/onboarding", name: "New-member setup", purpose: "Complete the four guided identity, contact, employment, and KYC sections.", officialTerm: "Simulated UMANG UAN return and Member Portal KYC review" },
@@ -41,10 +44,52 @@ const screenCatalog = [
   { path: "/overview", name: "Overview", purpose: "Show the highest-priority account issue, current records, and the recommended next action." },
 ] as const;
 
-function screenForRoute(route: string): AssistantContext["screen"] {
+function screenForRoute(
+  route: string,
+  snapshot: Awaited<ReturnType<typeof getMemberSnapshot>>,
+): AssistantContext["screen"] {
   const pathname = route.split("?")[0] || "/overview";
   const match = screenCatalog.find((screen) => pathname === screen.path || pathname.startsWith(`${screen.path}/`));
-  return match ?? { name: "EPF member portal", purpose: "Help the member understand the current page and choose a safe next action." };
+  const base = match ?? { name: "EPF member portal", purpose: "Help the member understand the current page and choose a safe next action." };
+
+  if (pathname === "/employment") {
+    const openEmployments = snapshot.employments.filter((employment) => !employment.exitedAt);
+    const latest = snapshot.employments[0];
+    const complete = snapshot.employments.length > 0 && openEmployments.length === 0;
+    return {
+      ...base,
+      currentState: complete ? "Employment record complete" : "Exit update needed",
+      visibleFacts: complete
+        ? [
+            "All employment records have a recorded exit date.",
+            ...(latest?.exitedAt ? [`Exit date on the latest record: ${latest.exitedAt}.`] : []),
+          ]
+        : [
+            `${openEmployments.length} employment record${openEmployments.length === 1 ? " has" : "s have"} no recorded exit date.`,
+            "The page offers the member-side Mark Exit process when its conditions are met.",
+          ],
+    };
+  }
+
+  return {
+    ...base,
+    currentState: snapshot.nextAction.label,
+    visibleFacts: snapshot.findings.slice(0, 4).map((finding) => `${finding.title}: ${finding.explanation}`),
+  };
+}
+
+export function sanitizeRenderedScreenText(text: string | undefined): string | null {
+  if (!text) return null;
+  const normalized = sanitizeMemberMessage(text)
+    .replace(/\b\d{4}[\s-]+\d{4}[\s-]+\d{4}\b/g, "[masked Aadhaar-format value]")
+    .replace(/\b[A-Z]{5}\d{10,22}\b/gi, "[masked EPF member ID]")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 6000);
+  return normalized || null;
 }
 
 function formatRupeesForDisplay(amountInPaise: number) {
@@ -67,9 +112,18 @@ function claimForAssistant(
   };
 }
 
-export async function buildAssistantContext({ demoRunId, route }: { demoRunId: string; route: string }): Promise<AssistantContext> {
+export async function buildAssistantContext({
+  demoRunId,
+  route,
+  visibleScreenText,
+}: {
+  demoRunId: string;
+  route: string;
+  visibleScreenText?: string;
+}): Promise<AssistantContext> {
   const snapshot = await getMemberSnapshot(demoRunId);
   const state = await getAssistantState(demoRunId);
+  const renderedScreenText = sanitizeRenderedScreenText(visibleScreenText);
   const processKey: "ONBOARDING" | "FINAL_CLAIM" | null = route.includes("onboarding") ? "ONBOARDING" : route.includes("claims") ? "FINAL_CLAIM" : null;
   const activeProcess = processKey ? {
     key: processKey,
@@ -78,7 +132,10 @@ export async function buildAssistantContext({ demoRunId, route }: { demoRunId: s
   } : null;
   return {
     route,
-    screen: screenForRoute(route),
+    screen: screenForRoute(route, snapshot),
+    renderedScreen: renderedScreenText
+      ? { source: "current-rendered-page", text: renderedScreenText }
+      : null,
     snapshot,
     findings: snapshot.findings,
     maskedModelSnapshot: {
