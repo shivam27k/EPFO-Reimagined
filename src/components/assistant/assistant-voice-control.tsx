@@ -3,6 +3,8 @@
 import { Mic } from "lucide-react";
 import { useEffect, useRef } from "react";
 
+import { describePortalAction, type PortalAction, type PortalActionResult } from "@/domain/portal-actions";
+import type { PendingPortalAction } from "./portal-action-coordinator";
 import { SafeBilingualText } from "./assistant-language";
 import { useAssistantVoice, type AssistantVoiceCaption, type AssistantVoiceState } from "./use-assistant-voice";
 
@@ -21,13 +23,17 @@ type AssistantVoiceControlProps = {
   active: boolean;
   contextVersion: string;
   route: string;
+  onToolCall?(action: PortalAction): Promise<PortalActionResult>;
+  pendingAction?: PendingPortalAction | null;
+  onConfirmPending?(): void;
+  onCancelPending?(): void;
   onExit(): void;
   onReturnToText(captions: AssistantVoiceCaption[]): void;
 };
 
 export function AssistantVoiceControl(props: AssistantVoiceControlProps) {
-  const { active, contextVersion, onExit, onReturnToText, route } = props;
-  const voice = useAssistantVoice({ active, contextVersion, route });
+  const { active, contextVersion, onCancelPending, onConfirmPending, onExit, onReturnToText, onToolCall, pendingAction, route } = props;
+  const voice = useAssistantVoice({ active, contextVersion, onToolCall, route });
   const captionRef = useRef<HTMLDivElement>(null);
   const isSpeaking = voice.state === "SPEAKING";
 
@@ -61,6 +67,7 @@ export function AssistantVoiceControl(props: AssistantVoiceControlProps) {
         {voice.answer ? <p><strong>EPF Sahayak:</strong> <SafeBilingualText text={voice.answer} /></p> : null}
         {voice.error ? <p role="alert">{voice.error}</p> : null}
       </div>
+      {pendingAction ? <div className="assistant-voice-pending" role="status"><strong>{describePortalAction(pendingAction)}</strong><span>Confirm before anything changes.</span><div><button onClick={onConfirmPending} type="button">Confirm</button><button onClick={onCancelPending} type="button">Cancel</button></div></div> : null}
       <div aria-label="Voice controls" className="assistant-voice-controls" role="group">
         {isSpeaking ? <button className="assistant-voice-state-action" disabled={!active} onClick={voice.stopSpeaking} type="button">Stop playback</button> : null}
         {voice.state === "IDLE" ? <button className="assistant-voice-state-action" disabled={!active} onClick={voice.startListening} type="button">Start voice</button> : null}

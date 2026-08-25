@@ -123,12 +123,12 @@ export default async function ClaimsPage() {
         { label: "Last update", value: latestEvent ? latestEvent.occurredAt.slice(0, 10) : "Not submitted", supporting: latestEvent?.status.replaceAll("_", " ") ?? "No claim event yet" },
       ]} />
 
-      <DetailDisclosure summary={blockers.length ? `View ${blockers.length} eligibility blocker${blockers.length === 1 ? "" : "s"}` : "View eligibility checks"}>
+      <DetailDisclosure assistantTarget="claims.eligibility" summary={blockers.length ? `View ${blockers.length} eligibility blocker${blockers.length === 1 ? "" : "s"}` : "View eligibility checks"}>
         <ClaimReadiness findings={snapshot.findings} />
       </DetailDisclosure>
 
       {!submissionPossible ? (
-        <DetailDisclosure summary="View final-settlement confirmation requirements">
+        <DetailDisclosure assistantTarget="claims.confirmations" summary="View final-settlement confirmation requirements">
           <ul>
             {processDefinitions.FINAL_CLAIM.questions.map((question) => (
               <li key={question.key}><strong>{question.label}</strong> — {question.explanation}</li>
@@ -144,7 +144,7 @@ export default async function ClaimsPage() {
         </DetailDisclosure>
       ) : null}
 
-      <DetailDisclosure summary="View full claim event history">
+      <DetailDisclosure assistantTarget="claims.history" summary="View full claim event history">
         <ClaimTimeline events={snapshot.claimEvents} />
       </DetailDisclosure>
     </div>

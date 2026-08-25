@@ -1,5 +1,6 @@
 import "server-only";
 
+import { portalToolDefinitions } from "@/domain/portal-actions";
 import { sanitizeMemberMessage } from "./assistant-store";
 import { buildAssistantContext } from "./context";
 import { assistantInstructions } from "./instructions";
@@ -138,6 +139,9 @@ export async function buildRealtimeSessionConfig({
     type: "realtime",
     model: process.env.OPENAI_REALTIME_MODEL?.trim() || DEFAULT_REALTIME_MODEL,
     output_modalities: ["audio"],
+    tools: portalToolDefinitions,
+    tool_choice: "auto",
+    parallel_tool_calls: false,
     audio: {
       input: {
         noise_reduction: { type: "near_field" },
@@ -157,6 +161,7 @@ export async function buildRealtimeSessionConfig({
     },
     instructions: [
       assistantInstructions,
+      "When the member asks you to navigate, open a workflow, reveal a section, focus a control, or run a supported demo action, use the matching function tool. Do not say you cannot navigate when an allowlisted tool applies. Never claim an action succeeded until its function output says completed. State-changing demo actions require explicit confirmation through the pending-action tools.",
       "Current masked portal context (synthetic data only):",
       JSON.stringify(maskedScreenContext),
     ].join("\n\n"),

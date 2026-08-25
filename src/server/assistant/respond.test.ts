@@ -120,4 +120,17 @@ describe("assistant response grounding", () => {
     expect(reply.text).toBe("मुझे यक़ीन नहीं है कि आपको किस मदद की ज़रूरत है। आप इस पेज के बारे में क्या जानना चाहते हैं?");
     expect(reply.text).not.toMatch(/[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/u);
   });
+
+  test("returns an executable profile navigation action without requiring OpenAI", async () => {
+    const reply = await respondToMember({ demoRunId, route: "/overview", message: "Open my profile" });
+    expect(reply.portalActions).toEqual([{ name: "navigate_to", arguments: { destination: "profile" } }]);
+    expect(reply.actions).toHaveLength(0);
+  });
+
+  test("opens and reveals correction and nomination workflows", async () => {
+    const correction = await respondToMember({ demoRunId, route: "/overview", message: "Show me where to correct my name" });
+    const nomination = await respondToMember({ demoRunId, route: "/overview", message: "मुझे nomination जोड़ने में मदद करो" });
+    expect(correction.portalActions).toEqual([{ name: "start_workflow", arguments: { workflow: "profile_correction" } }]);
+    expect(nomination.portalActions).toEqual([{ name: "start_workflow", arguments: { workflow: "nomination_guidance" } }]);
+  });
 });

@@ -141,7 +141,7 @@ export default async function ProfilePage() {
         </DetailDisclosure>
 
         <div id="kyc-records">
-          <DetailDisclosure summary="View individual KYC records" defaultOpen={Boolean(leadFinding)}>
+          <DetailDisclosure assistantTarget="profile.kyc_records" summary="View individual KYC records" defaultOpen={Boolean(leadFinding)}>
             <div className={styles.kycRegister}>
               {snapshot.kyc.map((record) => (
                 <article data-status={record.status.toLowerCase()} key={record.type}>
@@ -154,7 +154,7 @@ export default async function ProfilePage() {
           </DetailDisclosure>
         </div>
 
-        <DetailDisclosure summary="View profile and account tools">
+        <DetailDisclosure assistantTarget="profile.account_tools" summary="View profile and account tools">
           <nav className={styles.toolGrid} aria-label="Member account tools">
             <Link href="/uan-card"><strong>UAN card</strong><span>View and print a masked demo card.</span></Link>
             <Link href="/contact-details"><strong>Contact details</strong><span>Review mobile and update-request status.</span></Link>

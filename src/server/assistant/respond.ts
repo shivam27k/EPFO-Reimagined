@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { createHash } from "node:crypto";
 
+import { parsePortalToolCall, portalToolDefinitions, type PortalAction } from "@/domain/portal-actions";
 import { buildAssistantContext } from "./context";
 import { detectIntent, type AssistantIntent } from "./intent";
 import { assistantInstructions } from "./instructions";
@@ -11,6 +12,7 @@ export interface AssistantReply {
   intent: AssistantIntent;
   actions: AssistantActionProposal[];
   usedFallback: boolean;
+  portalActions: PortalAction[];
 }
 
 const LOW_CONFIDENCE_THRESHOLD = 0.7;
@@ -33,6 +35,25 @@ function fallbackText(context: Awaited<ReturnType<typeof buildAssistantContext>>
   return `${summary} This is based on the stored synthetic member state.`;
 }
 
+function deterministicPortalAction(message: string): PortalAction | null {
+  const value = message.toLowerCase();
+  const asksToMove = /\b(open|go|take me|navigate|show me where|start|help me (?:add|update|correct))\b|खोल|ले चल|दिखा|जोड़|सुधार/u.test(value);
+  if (!asksToMove) return null;
+  if (/(correct|change|edit|सुधार).*(name|profile|नाम|प्रोफाइल)|(name|नाम).*(correct|change|सुधार)/u.test(value)) return { name: "start_workflow", arguments: { workflow: "profile_correction" } };
+  if (/nomination|नामांकन|नॉमिनेशन/u.test(value)) return { name: "start_workflow", arguments: { workflow: "nomination_guidance" } };
+  const destinations: Array<[RegExp, PortalAction]> = [
+    [/profile|प्रोफाइल/u, { name: "navigate_to", arguments: { destination: "profile" } }],
+    [/employment|job record|रोजगार/u, { name: "navigate_to", arguments: { destination: "employment" } }],
+    [/contribution|passbook|पासबुक|योगदान/u, { name: "navigate_to", arguments: { destination: "contributions" } }],
+    [/claim|withdraw|क्लेम|दावा|निकाल/u, { name: "navigate_to", arguments: { destination: "claims" } }],
+    [/service|सेवा/u, { name: "navigate_to", arguments: { destination: "services" } }],
+    [/transfer|ट्रांसफर/u, { name: "navigate_to", arguments: { destination: "transfers" } }],
+    [/help|मदद/u, { name: "navigate_to", arguments: { destination: "help" } }],
+    [/overview|home|होम/u, { name: "navigate_to", arguments: { destination: "overview" } }],
+  ];
+  return destinations.find(([pattern]) => pattern.test(value))?.[1] ?? null;
+}
+
 export async function respondToMember({
   demoRunId,
   route,
@@ -46,12 +67,24 @@ export async function respondToMember({
 }): Promise<AssistantReply> {
   const context = await buildAssistantContext({ demoRunId, route, visibleScreenText });
   const intent = detectIntent(message, route);
+  const directAction = deterministicPortalAction(message);
+
+  if (directAction) {
+    return {
+      text: "I’ll open the relevant place now.",
+      intent,
+      actions: [],
+      portalActions: [directAction],
+      usedFallback: false,
+    };
+  }
 
   if (intent.confidence < LOW_CONFIDENCE_THRESHOLD) {
     return {
       text: lowConfidenceFallbackText(message),
       intent,
       actions: [],
+      portalActions: [],
       usedFallback: true,
     };
   }
@@ -88,6 +121,7 @@ export async function respondToMember({
       text: fallbackText(context),
       intent,
       actions,
+      portalActions: [],
       usedFallback: true,
     };
   }
@@ -114,21 +148,30 @@ export async function respondToMember({
         allowedProposalTypes: context.allowedActions,
       }),
       store: false,
+      tools: portalToolDefinitions,
+      tool_choice: "auto",
+      parallel_tool_calls: false,
       safety_identifier: createHash("sha256").update(demoRunId).digest("hex").slice(0, 64),
     });
 
     const text = response.output_text.trim();
+    const portalActions = response.output.flatMap((item) => {
+      if (item.type !== "function_call") return [];
+      try { return [parsePortalToolCall(item.name, item.arguments)]; } catch { return []; }
+    });
     return {
-      text: text || fallbackText(context),
+      text: text || (portalActions.length > 0 ? "I’ll do that now." : fallbackText(context)),
       intent,
       actions,
-      usedFallback: text.length === 0,
+      portalActions,
+      usedFallback: text.length === 0 && portalActions.length === 0,
     };
   } catch {
     return {
       text: `${fallbackText(context)} The OpenAI response was unavailable, so I used the built-in grounded explanation instead.`,
       intent,
       actions,
+      portalActions: [],
       usedFallback: true,
     };
   }

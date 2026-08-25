@@ -4041,6 +4041,18 @@ textarea {
   gap: 7px;
 }
 
+.assistant-voice-pending {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.75rem;
+  border: 1px solid #b9770e;
+  background: #fff8e8;
+  color: var(--ink);
+}
+
+.assistant-voice-pending span { font-size: 0.78rem; }
+.assistant-voice-pending div { display: flex; gap: 0.5rem; }
+
 .assistant-voice-control button {
   padding: 8px 12px;
   border: 1px solid transparent;

@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { parsePortalToolCall, type PortalAction, type PortalActionResult } from "@/domain/portal-actions";
 import { containsForbiddenScript } from "./assistant-language";
 import { captureVisibleScreenText, visibleScreenFingerprint } from "./visible-screen-context";
 
@@ -24,6 +25,7 @@ type RealtimeEvent = {
   item_id?: unknown;
   previous_item_id?: unknown;
   item?: unknown;
+  response?: unknown;
 };
 
 type CaptionItem = {
@@ -114,10 +116,12 @@ function orderCaptionItems(items: CaptionItem[]): CaptionItem[] {
 export function useAssistantVoice({
   active,
   contextVersion,
+  onToolCall,
   route,
 }: {
   active: boolean;
   contextVersion: string;
+  onToolCall?: (action: PortalAction) => Promise<PortalActionResult>;
   route: string;
 }) {
   const [state, setState] = useState<AssistantVoiceState>("IDLE");
@@ -143,6 +147,9 @@ export function useAssistantVoice({
   const setupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const totalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handledToolCallsRef = useRef(new Set<string>());
+  const onToolCallRef = useRef(onToolCall);
+  onToolCallRef.current = onToolCall;
 
   const clearSetupTimer = useCallback(() => {
     if (setupTimerRef.current) clearTimeout(setupTimerRef.current);
@@ -204,6 +211,34 @@ export function useAssistantVoice({
     resetIdleTimer();
     return true;
   }, [resetIdleTimer]);
+
+  const handleToolCalls = useCallback(async (event: RealtimeEvent) => {
+    const response = typeof event.response === "object" && event.response !== null
+      ? event.response as Record<string, unknown>
+      : {};
+    const output = Array.isArray(response.output) ? response.output : [];
+    for (const candidate of output) {
+      if (typeof candidate !== "object" || candidate === null) continue;
+      const item = candidate as Record<string, unknown>;
+      if (item.type !== "function_call" || typeof item.call_id !== "string" || typeof item.name !== "string") continue;
+      if (handledToolCallsRef.current.has(item.call_id)) continue;
+      handledToolCallsRef.current.add(item.call_id);
+      let result: PortalActionResult;
+      try {
+        const action = parsePortalToolCall(item.name, typeof item.arguments === "string" ? item.arguments : "{}");
+        result = onToolCallRef.current
+          ? await onToolCallRef.current(action)
+          : { status: "unavailable", message: "Portal actions are not available in this session." };
+      } catch {
+        result = { status: "failed", message: "That portal action was not valid or supported." };
+      }
+      sendClientEvent({
+        type: "conversation.item.create",
+        item: { type: "function_call_output", call_id: item.call_id, output: JSON.stringify(result) },
+      });
+      sendClientEvent({ type: "response.create" });
+    }
+  }, [sendClientEvent]);
 
   const publishCaptions = useCallback(() => {
     const ordered = orderCaptionItems([...captionStoreRef.current.values()]);
@@ -292,6 +327,9 @@ export function useAssistantVoice({
       case "output_audio_buffer.stopped":
         setState("LISTENING");
         break;
+      case "response.done":
+        void handleToolCalls(event);
+        break;
       case "input_audio_buffer.speech_started":
         inputItemRef.current = typeof event.item_id === "string" ? event.item_id : "";
         setTranscript("");
@@ -303,7 +341,7 @@ export function useAssistantVoice({
       default:
         break;
     }
-  }, [eventItemId, fail, publishCaptions, resetIdleTimer, upsertCaptionItem]);
+  }, [eventItemId, fail, handleToolCalls, publishCaptions, resetIdleTimer, upsertCaptionItem]);
 
   const refreshContext = useCallback(async (nextRoute: string, nextContextKey: string) => {
     const resources = resourcesRef.current;
@@ -377,6 +415,7 @@ export function useAssistantVoice({
       fallbackItemSequenceRef.current = 0;
       inputItemRef.current = "";
       outputItemRef.current = "";
+      handledToolCallsRef.current.clear();
       startTotalTimer();
     }
     setError("");

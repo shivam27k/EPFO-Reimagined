@@ -559,4 +559,20 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
     expect(within(hud).getByRole("button", { name: "Open text chat" })).toBeEnabled();
     expect(within(hud).getByRole("button", { name: "End voice mode" })).toBeEnabled();
   });
+
+  it("executes allowlisted Realtime function calls and returns their output", async () => {
+    const onToolCall = vi.fn(async () => ({ status: "completed" as const, message: "Opened profile.", route: "/profile" }));
+    const { channel } = await beginRealtimeSession({ onToolCall });
+
+    act(() => channel.receive({
+      type: "response.done",
+      response: { output: [{ type: "function_call", call_id: "call_profile", name: "navigate_to", arguments: '{"destination":"profile"}' }] },
+    }));
+
+    await waitFor(() => expect(onToolCall).toHaveBeenCalledWith({ name: "navigate_to", arguments: { destination: "profile" } }));
+    await waitFor(() => expect(sentEvents(channel)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "conversation.item.create", item: expect.objectContaining({ type: "function_call_output", call_id: "call_profile" }) }),
+      { type: "response.create" },
+    ])));
+  });
 });

@@ -11,6 +11,7 @@ import {
   type AssistantValidationEventDetail,
 } from "@/domain/assistant-events";
 import type { MemberSnapshot } from "@/domain/member-snapshot";
+import { describePortalAction, type PortalAction, type PortalActionResult } from "@/domain/portal-actions";
 import { processDefinitions } from "@/domain/process-definitions";
 import { buildQuestionBatches, type FormFieldProposal, type FormPatchScope } from "@/server/assistant/form-copilot";
 import type { AssistantActionProposal } from "@/server/assistant/tools";
@@ -19,6 +20,7 @@ import { AssistantVoiceControl, type AssistantVoiceCaption } from "./assistant-v
 import { FormPatchReview } from "./form-patch-review";
 import { ProactivePrompt, type ProactivePromptModel } from "./proactive-prompt";
 import { captureVisibleScreenText } from "./visible-screen-context";
+import { consumeQueuedPortalTarget, executePortalAction, type PendingPortalAction } from "./portal-action-coordinator";
 
 interface Message {
   role: "member" | "assistant";
@@ -108,6 +110,7 @@ export function AssistantPanel({
   const [patchScope, setPatchScope] = useState<FormPatchScope>("SECTION");
   const [patchPending, setPatchPending] = useState(false);
   const [extractionMessage, setExtractionMessage] = useState("");
+  const [pendingPortalAction, setPendingPortalAction] = useState<PendingPortalAction | null>(null);
   const open = controlledOpen ?? internalOpen;
   const textOpen = open && !voiceActive;
 
@@ -168,6 +171,24 @@ export function AssistantPanel({
   const visiblePrompt = proactive && !dismissed.includes(proactive.key) ? proactive : null;
   const suggestions = pageSuggestions[pathname] ?? ["What should I do next?", "Explain this page in plain language"];
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => consumeQueuedPortalTarget(), 80);
+    return () => window.clearTimeout(timer);
+  }, [pathname]);
+
+  async function handlePortalAction(action: PortalAction): Promise<PortalActionResult> {
+    const result = await executePortalAction(action, {
+      pathname,
+      navigate: (route) => router.push(route),
+      refresh: () => router.refresh(),
+      pendingAction: pendingPortalAction,
+      setPendingAction: setPendingPortalAction,
+      employmentId: snapshot.employments[0]?.employmentKey,
+    });
+    if (result.status === "completed" && (action.name === "navigate_to" || action.name === "start_workflow")) closeAssistant();
+    return result;
+  }
+
   async function persistState(body: Record<string, string>) {
     const response = await fetch("/api/assistant", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     if (!response.ok) throw new Error("Assistant state could not be saved.");
@@ -199,11 +220,18 @@ export function AssistantPanel({
       if (!response.ok) throw new Error(String(result.error ?? "Assistant response could not be loaded."));
       const text = String(result.text ?? "I could not explain that yet.");
       setMessages((current) => [...current, { role: "assistant", text, source: result.usedFallback ? "fallback" : "openai", actions: Array.isArray(result.actions) ? result.actions as AssistantActionProposal[] : [] }]);
+      const portalActions = Array.isArray(result.portalActions) ? result.portalActions as PortalAction[] : [];
+      for (const action of portalActions) await handlePortalAction(action);
       return { text };
     } catch (error) {
       if (!signal?.aborted) setPanelError(error instanceof Error ? error.message : "Assistant unavailable. Use the visible page actions to continue.");
       return null;
     } finally { setPending(false); }
+  }
+
+  async function resolvePendingPortalAction(confirm: boolean) {
+    const result = await handlePortalAction({ name: confirm ? "confirm_pending_action" : "cancel_pending_action", arguments: {} });
+    setMessages((current) => [...current, { role: "assistant", text: result.message, source: "fallback" }]);
   }
 
   async function decideAction(action: AssistantActionProposal, decision: "CONFIRMED" | "REJECTED") {
@@ -289,6 +317,7 @@ export function AssistantPanel({
           {historyLoading ? <div className="assistant-empty"><Sparkles aria-hidden="true" size={18} /> Loading this run’s conversation…</div> : null}
           {!historyLoading && messages.length === 0 ? <div className="assistant-empty">Ask about this page, a status, or the safest next action.</div> : null}
           {messages.map((message, index) => <div key={`${message.role}-${index}-${message.text}`}><AssistantMessage role={message.role} source={message.source} text={message.text} />{message.actions?.map((action) => <div className="assistant-action-card" key={`${action.type}-${action.label}`}><strong>{action.label}</strong><p>Nothing changes until you confirm.</p><div><button className="primary-action" onClick={() => decideAction(action, "CONFIRMED")} type="button">Confirm action</button><button className="secondary-action" onClick={() => decideAction(action, "REJECTED")} type="button">Keep unchanged</button></div></div>)}</div>)}
+          {pendingPortalAction ? <div className="assistant-action-card" role="status"><strong>{describePortalAction(pendingPortalAction)}</strong><p>Nothing changes until you confirm.</p><div><button className="primary-action" disabled={pending} onClick={() => resolvePendingPortalAction(true)} type="button">Confirm action</button><button className="secondary-action" disabled={pending} onClick={() => resolvePendingPortalAction(false)} type="button">Cancel</button></div></div> : null}
           {pending ? <div className="assistant-empty"><Sparkles aria-hidden="true" size={18} /> Checking the masked demo record…</div> : null}
         </div>
         {panelError ? <p className="assistant-error" role="alert">{panelError}</p> : null}
@@ -300,7 +329,7 @@ export function AssistantPanel({
         </form>{extractionMessage ? <p className="extraction-feedback" role="status">{extractionMessage}</p> : null}{proposals.length > 0 ? <><div className="patch-scope" aria-label="Apply scope"><button aria-pressed={patchScope === "FIELD"} onClick={() => setPatchScope("FIELD")} type="button">One field</button><button aria-pressed={patchScope === "SECTION"} onClick={() => setPatchScope("SECTION")} type="button">This section</button><button aria-pressed={patchScope === "WHOLE_FORM"} onClick={() => setPatchScope("WHOLE_FORM")} type="button">All extracted</button></div><FormPatchReview proposals={scopedProposals} scope={patchScope} pending={patchPending} onConfirm={applyPatch} onCancel={() => { setProposals([]); setExtractionMessage("Proposals cancelled. No data changed."); void persistState({ kind: "DISMISS_FORM_PATCH" }).catch(() => setPanelError("The proposal was hidden, but that choice may not survive a refresh.")); }} /></> : null}</details> : null}
         <form className="assistant-form" onSubmit={(event) => { event.preventDefault(); sendMessage(input); }}><label htmlFor="assistant-message">Ask EPF Sahayak</label><input id="assistant-message" onChange={(event) => setInput(event.target.value)} placeholder="Why is this blocked?" value={input} /><button aria-label="Talk to EPF Sahayak" className="assistant-voice-button" disabled={pending} onClick={startVoice} title="Voice" type="button"><Mic aria-hidden="true" size={18} /></button><button className="primary-action" disabled={pending || !input.trim()} type="submit"><Send aria-hidden="true" size={16} /> Send</button></form>
       </aside>
-      {voiceActive ? <AssistantVoiceControl active contextVersion={voiceContextVersion} onExit={() => setVoiceActive(false)} onReturnToText={returnToText} route={pathname} /> : null}
+      {voiceActive ? <AssistantVoiceControl active contextVersion={voiceContextVersion} onExit={() => setVoiceActive(false)} onReturnToText={returnToText} onToolCall={handlePortalAction} pendingAction={pendingPortalAction} onConfirmPending={() => resolvePendingPortalAction(true)} onCancelPending={() => resolvePendingPortalAction(false)} route={pathname} /> : null}
     </section>
   );
 }

@@ -34,7 +34,7 @@ export default async function NominationPage() {
       </section>
       </DetailDisclosure>
 
-      <DetailDisclosure summary="View official e-Nomination journey steps">
+      <DetailDisclosure assistantTarget="nomination.guidance" summary="View official e-Nomination journey steps">
       <section className="walkthrough-steps" aria-labelledby="nomination-walkthrough-heading">
         <div><p className="utility-label">Non-submitting walkthrough</p><h2 id="nomination-walkthrough-heading">What the official journey requires</h2></div>
         <ol><li><span><Check aria-hidden="true" size={16} /></span><div><strong>Review family details</strong><p>Add eligible family members and their relationship details.</p></div></li><li><span>2</span><div><strong>Allocate the share</strong><p>Nominee shares must add up to 100% for the relevant benefit.</p></div></li><li><span>3</span><div><strong>Complete Aadhaar-based e-sign</strong><p>EPFO requires the member to e-sign the e-nomination using Aadhaar. This prototype never requests Aadhaar or OTP data.</p></div></li></ol>

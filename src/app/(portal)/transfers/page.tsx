@@ -43,7 +43,7 @@ export default async function TransfersPage() {
       </section>
       </DetailDisclosure>
 
-      <DetailDisclosure summary="View employment records for transfer">
+      <DetailDisclosure assistantTarget="transfers.records" summary="View employment records for transfer">
       <section className="service-section" aria-labelledby="transfer-employment-heading">
         <div className="section-heading-row"><div><p className="utility-label">Employment selection</p><h2 id="transfer-employment-heading">Choose the record to transfer from</h2></div><span>Walkthrough only</span></div>
         <p className="section-intro">The current EPFO flow asks a member to identify previous and present employment. This readable preview uses only masked fictional records.</p>

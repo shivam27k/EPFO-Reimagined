@@ -95,7 +95,7 @@ export default async function EmploymentPage(
         },
       ]} />
 
-      <DetailDisclosure summary="View employment records">
+      <DetailDisclosure assistantTarget="employment.records" summary="View employment records">
         <section className="record-stack" aria-labelledby="employment-records-heading">
           <div className="section-heading-row">
             <div>

@@ -81,7 +81,7 @@ export default async function ServicesPage() {
         })}
       </div>
 
-      <DetailDisclosure summary="View online-service prototype boundary">
+      <DetailDisclosure assistantTarget="services.options" summary="View online-service prototype boundary">
         <p className={styles.sourceNote}>These screens explain or calculate from fictional stored data. Only the existing final-settlement demo writes a claim; the other services do not submit forms or contact EPFO.</p>
       </DetailDisclosure>
     </div>

@@ -121,7 +121,7 @@ export default async function PassbookPage(
       ]} />
 
       {snapshot.contributions.length > 0 ? (
-        <DetailDisclosure summary="View monthly contribution records" defaultOpen={Boolean(gapContribution)}>
+        <DetailDisclosure assistantTarget="contributions.monthly_records" summary="View monthly contribution records" defaultOpen={Boolean(gapContribution)}>
           <div id="monthly-contribution-records">
             <ContributionTable contributions={snapshot.contributions} />
           </div>

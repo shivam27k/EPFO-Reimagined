@@ -105,15 +105,17 @@ interface DetailDisclosureProps {
   summary: string;
   children: ReactNode;
   defaultOpen?: boolean;
+  assistantTarget?: string;
 }
 
 export function DetailDisclosure({
   summary,
   children,
   defaultOpen = false,
+  assistantTarget,
 }: DetailDisclosureProps): ReactNode {
   return (
-    <details className={styles.detailDisclosure} open={defaultOpen}>
+    <details className={styles.detailDisclosure} data-assistant-target={assistantTarget} open={defaultOpen}>
       <summary>{summary}</summary>
       <div className={styles.disclosureContent}>{children}</div>
     </details>
