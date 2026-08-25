@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
 
 const devanagariPattern = /[\u0900-\u097f]/u;
-const forbiddenScriptPattern = /[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]/u;
+const permittedCharacterPattern = /^[\p{Script=Latin}\p{Script=Devanagari}\p{Script=Common}\p{Script=Inherited}]$/u;
 const unsupportedScriptNotice = "Speech received in an unsupported script. Please speak in English or Hindi.";
 
 export function containsForbiddenScript(text: string): boolean {
-  return forbiddenScriptPattern.test(text);
+  return Array.from(text).some((character) => !permittedCharacterPattern.test(character));
 }
 
 export function SafeBilingualText({ text }: { text: string }): ReactNode {

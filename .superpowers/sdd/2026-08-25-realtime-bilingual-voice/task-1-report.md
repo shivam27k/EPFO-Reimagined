@@ -36,3 +36,25 @@
 ## Concerns
 
 None. This task establishes the shared rendering primitive and policy; the later Realtime integration task must use `SafeBilingualText` at every member and assistant caption rendering point.
+
+## Fix round 1
+
+### Root cause and implementation
+
+- The initial classifier treated every non-Devanagari character as English. That was a denylist gap: it rendered unrelated scripts and missed newer Arabic blocks.
+- `containsForbiddenScript` now uses a positive per-code-point allowlist: `Script=Latin`, `Script=Devanagari`, `Script=Common`, and `Script=Inherited`. Every other code point is replaced by the neutral notice.
+- `Script=Common` and `Script=Inherited` deliberately preserve ordinary punctuation, digits, whitespace, emoji, variation selectors, and joining characters alongside English/Hindi text.
+
+### Test additions and commands
+
+1. `bun run test -- src/components/assistant/assistant-language.test.tsx --run`
+   - Red output: 6 expected failures for Arabic Extended-B, Arabic Extended-C, Arabic Mathematical Alphabetic Symbols, Cyrillic, Bengali, and Chinese input; each was incorrectly rendered as English by the previous classifier.
+2. `bun run test -- src/components/assistant/assistant-language.test.tsx --run`
+   - Green output: `Test Files 1 passed (1)`, `Tests 11 passed (11)`.
+3. `bunx tsc --noEmit`
+   - Green output: exit code 0 with no diagnostics.
+
+### Review result
+
+- Tests now directly exercise all Arabic blocks identified in review, three unrelated writing systems, and accepted punctuation/emoji behavior.
+- No concerns remain for this fix round.

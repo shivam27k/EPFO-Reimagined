@@ -28,11 +28,34 @@ describe("SafeBilingualText", () => {
     expect(container.querySelectorAll(".assistant-text-hindi")).toHaveLength(2);
   });
 
-  it("replaces Arabic and Perso-Arabic captions instead of rendering them", () => {
-    render(<SafeBilingualText text="یہ متن ظاہر نہیں ہونا چاہیے" />);
+  it.each([
+    ["Arabic", "یہ متن ظاہر نہیں ہونا چاہیے"],
+    ["Arabic Extended-B", "\u0870"],
+    ["Arabic Extended-C", "\u{10EC0}"],
+    ["Arabic Mathematical Alphabetic Symbols", "\u{1EE00}"],
+  ])("replaces %s captions instead of rendering them", (_name, text) => {
+    render(<SafeBilingualText text={text} />);
 
     expect(screen.getByText("Speech received in an unsupported script. Please speak in English or Hindi.")).toBeVisible();
-    expect(screen.queryByText("یہ متن ظاہر نہیں ہونا چاہیے")).toBeNull();
-    expect(containsForbiddenScript("یہ متن ظاہر نہیں ہونا چاہیے")).toBe(true);
+    expect(screen.queryByText(text)).toBeNull();
+    expect(containsForbiddenScript(text)).toBe(true);
+  });
+
+  it.each([
+    ["Cyrillic", "Привет"],
+    ["Bengali", "স্বাগতম"],
+    ["Chinese", "你好"],
+  ])("replaces unsupported %s captions", (_name, text) => {
+    render(<SafeBilingualText text={text} />);
+
+    expect(screen.getByText("Speech received in an unsupported script. Please speak in English or Hindi.")).toBeVisible();
+    expect(containsForbiddenScript(text)).toBe(true);
+  });
+
+  it("keeps common punctuation and emoji with an English caption", () => {
+    render(<SafeBilingualText text="Your passbook is ready! ✅" />);
+
+    expect(screen.getByText("Your passbook is ready! ✅")).toHaveClass("assistant-text-english");
+    expect(containsForbiddenScript("Your passbook is ready! ✅")).toBe(false);
   });
 });
