@@ -4,6 +4,7 @@ import { destinationRoutes, parsePortalToolCall, portalToolDefinitions, realtime
 describe("portal action catalog", () => {
   test("parses only allowlisted destinations", () => {
     expect(parsePortalToolCall("navigate_to", '{"destination":"profile"}')).toEqual({ name: "navigate_to", arguments: { destination: "profile" } });
+    expect(parsePortalToolCall("scroll_page", '{"destination":"top"}')).toEqual({ name: "scroll_page", arguments: { destination: "top" } });
     expect(destinationRoutes.profile).toBe("/profile");
     expect(() => parsePortalToolCall("navigate_to", '{"destination":"https://example.com"}')).toThrow();
   });
@@ -19,7 +20,7 @@ describe("portal action catalog", () => {
   });
 
   test("publishes closed function schemas", () => {
-    expect(portalToolDefinitions).toHaveLength(7);
+    expect(portalToolDefinitions).toHaveLength(8);
     expect(portalToolDefinitions.every((entry) => entry.parameters.additionalProperties === false)).toBe(true);
   });
 

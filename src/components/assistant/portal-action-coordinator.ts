@@ -20,6 +20,31 @@ type CoordinatorDependencies = {
 
 const QUEUED_TARGET_KEY = "epf-sahayak:queued-target";
 
+function currentPageScrollTop(): number {
+  return Math.max(window.scrollY, document.documentElement.scrollTop, document.body.scrollTop);
+}
+
+function scrollPage(destination: "top" | "up" | "down" | "bottom"): PortalActionResult {
+  const current = currentPageScrollTop();
+  const maximum = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  const pageStep = Math.max(1, Math.round(window.innerHeight * 0.8));
+  const top = destination === "top" ? 0
+    : destination === "bottom" ? maximum
+      : destination === "up" ? Math.max(0, current - pageStep)
+        : Math.min(maximum, current + pageStep);
+
+  window.scrollTo({ behavior: "auto", left: 0, top });
+  const actual = currentPageScrollTop();
+  if (Math.abs(actual - top) > 1) {
+    return { status: "failed", message: `I could not verify that the page scrolled ${destination}.` };
+  }
+
+  const message = destination === "top" ? "Scrolled to the top of the page."
+    : destination === "bottom" ? "Scrolled to the bottom of the page."
+      : `Scrolled ${destination}.`;
+  return { status: "completed", message };
+}
+
 function revealTarget(target: string): boolean {
   const element = document.querySelector<HTMLElement>(`[data-assistant-target="${target}"]`);
   if (!element) return false;
@@ -68,6 +93,7 @@ export async function executePortalAction(action: PortalAction, deps: Coordinato
     }
     return { status: "completed", message: `Opened ${action.arguments.workflow.replaceAll("_", " ")}.`, route: destination.route, target: destination.target };
   }
+  if (action.name === "scroll_page") return scrollPage(action.arguments.destination);
   if (action.name === "reveal_section" || action.name === "focus_control") {
     const completed = revealTarget(action.arguments.target);
     return completed

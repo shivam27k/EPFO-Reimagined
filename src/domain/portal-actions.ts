@@ -17,6 +17,8 @@ export const portalTargets = [
   "claims.history", "services.options", "transfers.records", "nomination.guidance",
 ] as const;
 
+export const portalScrollDestinations = ["top", "up", "down", "bottom"] as const;
+
 export const demoActions = [
   "simulate_bank_correction", "simulate_employer_exit_date", "load_missing_contribution",
   "simulate_ecr_posting", "simulate_two_month_wait", "simulate_cryptic_claim_status",
@@ -28,6 +30,7 @@ const actionSchemas = {
   navigate_to: z.object({ destination: z.enum(portalDestinations) }).strict(),
   reveal_section: z.object({ target: z.enum(portalTargets) }).strict(),
   focus_control: z.object({ target: z.enum(portalTargets) }).strict(),
+  scroll_page: z.object({ destination: z.enum(portalScrollDestinations) }).strict(),
   start_workflow: z.object({ workflow: z.enum(portalWorkflows) }).strict(),
   propose_demo_action: z.object({ action: z.enum(demoActions) }).strict(),
   confirm_pending_action: emptySchema,
@@ -77,6 +80,7 @@ export function describePortalAction(action: PortalAction): string {
   if (action.name === "start_workflow") return `Start ${action.arguments.workflow.replaceAll("_", " ")}`;
   if (action.name === "reveal_section") return `Show ${action.arguments.target.replaceAll(".", " ")}`;
   if (action.name === "focus_control") return `Focus ${action.arguments.target.replaceAll(".", " ")}`;
+  if (action.name === "scroll_page") return `Scroll ${action.arguments.destination}`;
   if (action.name === "propose_demo_action") return action.arguments.action.replaceAll("_", " ");
   return action.name === "confirm_pending_action" ? "Confirm pending action" : "Cancel pending action";
 }
@@ -97,6 +101,7 @@ export const portalToolDefinitions = [
   tool("navigate_to", "Navigate to a main member portal page. Use this whenever the user asks to open or go to a page.", { destination: { type: "string", enum: portalDestinations } }, ["destination"]),
   tool("reveal_section", "Open and scroll to a known section on the current or related page.", { target: { type: "string", enum: portalTargets } }, ["target"]),
   tool("focus_control", "Focus a known portal control so the member can continue themselves.", { target: { type: "string", enum: portalTargets } }, ["target"]),
+  tool("scroll_page", "Scroll the current page to the top, upward, downward, or to the bottom. Use this for explicit page-scrolling requests.", { destination: { type: "string", enum: portalScrollDestinations } }, ["destination"]),
   tool("start_workflow", "Open the safe entry page for a member workflow. This does not submit anything.", { workflow: { type: "string", enum: portalWorkflows } }, ["workflow"]),
   tool("propose_demo_action", "Propose an allowlisted state-changing demo simulation. This only creates a confirmation request.", { action: { type: "string", enum: demoActions } }, ["action"]),
   tool("confirm_pending_action", "Confirm the one pending demo action after the member explicitly says yes.", {}),
