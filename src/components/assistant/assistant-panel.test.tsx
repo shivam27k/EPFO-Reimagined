@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, vi } from "vitest";
 
@@ -130,6 +130,38 @@ describe("AssistantPanel voice integration", () => {
     expect(messages[1]).toHaveAttribute("data-role", "assistant");
     expect(messages[1]?.querySelector(".assistant-message-content")).toHaveTextContent("आपका passbook तैयार है");
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+  });
+
+  test("merges delayed server history with voice captions transferred while history loads", async () => {
+    let resolveHistory: ((body: Record<string, unknown>) => void) | undefined;
+    const historyBody = new Promise<Record<string, unknown>>((resolve) => {
+      resolveHistory = resolve;
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: () => historyBody })));
+    render(<AssistantPanel snapshot={snapshot()} />);
+
+    openVoiceMode();
+    fireEvent.click(screen.getByRole("button", { name: "Open text chat" }));
+    const dialog = screen.getByRole("dialog", { name: "EPF Sahayak conversation" });
+    expect(dialog.querySelectorAll(".assistant-message")).toHaveLength(2);
+
+    await act(async () => {
+      resolveHistory?.({
+        messages: [
+          { role: "assistant", text: "Saved guidance", source: "fallback" },
+          { role: "member", text: "मेरा passbook" },
+        ],
+        dismissedPromptKeys: [],
+        formPatchProposal: [],
+      });
+      await historyBody;
+    });
+
+    const messages = dialog.querySelectorAll(".assistant-message-content");
+    expect(messages).toHaveLength(3);
+    expect(within(dialog).getAllByText("Saved guidance")).toHaveLength(1);
+    expect(within(dialog).getAllByText((_, element) => element?.classList.contains("assistant-message-content") === true && element.textContent === "मेरा passbook")).toHaveLength(1);
+    expect(messages[2]).toHaveTextContent("आपका passbook तैयार है");
   });
 
   test("renders text messages with safe English and Devanagari spans", async () => {

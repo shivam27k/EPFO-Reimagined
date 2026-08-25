@@ -15,15 +15,28 @@ export function AssistantMessage({ role, text, source }: { role: "member" | "ass
         <div className="assistant-message-content">
           {containsForbiddenScript(text) ? <p><SafeBilingualText text={text} /></p> : (
             <Markdown
-              allowedElements={["p", "strong", "em", "ul", "ol", "li", "code", "br"]}
               components={{
+                a: ({ children }) => <>{renderSafeChildren(children)}</>,
+                blockquote: ({ children }) => <>{renderSafeChildren(children)}</>,
+                br: () => <br />,
                 code: ({ children }) => <code>{renderSafeChildren(children)}</code>,
                 em: ({ children }) => <em>{renderSafeChildren(children)}</em>,
+                h1: ({ children }) => <>{renderSafeChildren(children)}</>,
+                h2: ({ children }) => <>{renderSafeChildren(children)}</>,
+                h3: ({ children }) => <>{renderSafeChildren(children)}</>,
+                h4: ({ children }) => <>{renderSafeChildren(children)}</>,
+                h5: ({ children }) => <>{renderSafeChildren(children)}</>,
+                h6: ({ children }) => <>{renderSafeChildren(children)}</>,
+                hr: () => null,
+                img: () => null,
                 li: ({ children }) => <li>{renderSafeChildren(children)}</li>,
+                ol: ({ children }) => <ol>{renderSafeChildren(children)}</ol>,
                 p: ({ children }) => <p>{renderSafeChildren(children)}</p>,
+                pre: ({ children }) => <pre>{renderSafeChildren(children)}</pre>,
                 strong: ({ children }) => <strong>{renderSafeChildren(children)}</strong>,
+                ul: ({ children }) => <ul>{renderSafeChildren(children)}</ul>,
               }}
-              unwrapDisallowed
+              skipHtml
             >
               {text}
             </Markdown>

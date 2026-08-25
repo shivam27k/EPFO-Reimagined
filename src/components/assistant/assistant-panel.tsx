@@ -26,6 +26,26 @@ interface Message {
   actions?: AssistantActionProposal[];
 }
 
+function mergeMessageHistory(history: Message[], local: Message[]): Message[] {
+  const unmatchedHistory = new Map<string, number>();
+  const identity = (message: Message) => JSON.stringify([message.role, message.text, message.source ?? null]);
+
+  for (const message of history) {
+    const key = identity(message);
+    unmatchedHistory.set(key, (unmatchedHistory.get(key) ?? 0) + 1);
+  }
+
+  const localOnly = local.filter((message) => {
+    const key = identity(message);
+    const remaining = unmatchedHistory.get(key) ?? 0;
+    if (remaining === 0) return true;
+    unmatchedHistory.set(key, remaining - 1);
+    return false;
+  });
+
+  return [...history, ...localOnly];
+}
+
 const pageSuggestions: Record<string, string[]> = {
   "/onboarding": ["What information do I need?", "Why is identity matching important?"],
   "/profile": ["Explain my KYC status", "Who can correct a bank mismatch?"],
@@ -120,7 +140,8 @@ export function AssistantPanel({
     fetch("/api/assistant").then(async (response) => ({ response, body: await readJson(response) })).then(({ response, body }) => {
       if (!active) return;
       if (!response.ok) throw new Error(String(body.error ?? "Assistant history could not be loaded."));
-      setMessages(Array.isArray(body.messages) ? body.messages as Message[] : []);
+      const history = Array.isArray(body.messages) ? body.messages as Message[] : [];
+      setMessages((current) => mergeMessageHistory(history, current));
       setDismissed(Array.isArray(body.dismissedPromptKeys) ? body.dismissedPromptKeys as string[] : []);
       setProposals(Array.isArray(body.formPatchProposal) ? body.formPatchProposal as FormFieldProposal[] : []);
     }).catch((error) => active && setPanelError(error instanceof Error ? error.message : "Assistant history could not be loaded.")).finally(() => active && setHistoryLoading(false));

@@ -118,7 +118,6 @@ function renderControl(overrides: Partial<React.ComponentProps<typeof AssistantV
     route: "/overview",
     onExit: vi.fn(),
     onReturnToText: vi.fn(),
-    submitTranscript: vi.fn().mockResolvedValue({ text: "Legacy text answer" }),
     ...overrides,
   };
   return { ...render(<AssistantVoiceControl {...props} />), props };
@@ -198,7 +197,7 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
   });
 
   it("starts one persistent SDP session and attaches streamed remote audio", async () => {
-    const { peer, props } = await beginRealtimeSession();
+    const { peer } = await beginRealtimeSession();
 
     expect(getUserMedia).toHaveBeenCalledWith({ audio: true });
     expect(peer.addTrack).toHaveBeenCalledWith(expect.anything(), expect.anything());
@@ -214,7 +213,6 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
     }));
     expect(FakeRemoteAudio.instances[0]).toMatchObject({ autoplay: true, srcObject: remoteStream });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(props.submitTranscript).not.toHaveBeenCalled();
     expect(fetchMock.mock.calls.every(([url]) => !String(url).match(/\/(transcribe|speech)$/))).toBe(true);
   });
 
