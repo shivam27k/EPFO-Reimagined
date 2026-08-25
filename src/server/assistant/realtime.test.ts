@@ -53,6 +53,7 @@ describe("Realtime assistant session configuration", () => {
             type: "server_vad",
             create_response: true,
             interrupt_response: true,
+            silence_duration_ms: 3000,
           },
         },
         output: { voice: "coral" },

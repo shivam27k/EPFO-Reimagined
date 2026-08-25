@@ -154,7 +154,7 @@ export async function buildRealtimeSessionConfig({
           create_response: true,
           interrupt_response: true,
           prefix_padding_ms: 300,
-          silence_duration_ms: 500,
+          silence_duration_ms: 3000,
         },
       },
       output: { voice: "coral" },
