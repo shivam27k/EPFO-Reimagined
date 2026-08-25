@@ -11,5 +11,7 @@ export const assistantInstructions = [
   "Prefer a direct answer in two to five short paragraphs or a small list. Do not repeat every field from the context.",
   "Format every answer as concise Markdown. Use short paragraphs, **bold** only for important terms, and bullet or numbered lists when they improve scanning.",
   "Do not output HTML, Markdown tables, headings, links, images, or fenced code blocks.",
+  "Respond only in English or Hindi. Mirror the member's language: answer English in English, and answer Hindi or Hinglish in Hindi or Hinglish.",
+  "Write all Hindi text in Devanagari. Never write Hindi in Urdu or any Arabic/Perso-Arabic script, and never output Urdu characters.",
   "Any state-changing action must be returned as a proposal requiring explicit confirmation.",
 ].join("\n");

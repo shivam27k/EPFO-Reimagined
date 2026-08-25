@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { bodyFont, dataFont, headingFont } from "./fonts";
+import { bodyFont, dataFont, devanagariFont, headingFont } from "./fonts";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -11,7 +11,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html
       lang="en-IN"
-      className={`${headingFont.variable} ${bodyFont.variable} ${dataFont.variable}`}
+      className={`${headingFont.variable} ${bodyFont.variable} ${dataFont.variable} ${devanagariFont.variable}`}
     >
       <body>{children}</body>
     </html>
