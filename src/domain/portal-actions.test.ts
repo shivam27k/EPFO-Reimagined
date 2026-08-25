@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { destinationRoutes, parsePortalToolCall, portalToolDefinitions, workflowRoutes } from "./portal-actions";
+import { destinationRoutes, parsePortalToolCall, portalToolDefinitions, realtimePortalToolDefinitions, workflowRoutes } from "./portal-actions";
 
 describe("portal action catalog", () => {
   test("parses only allowlisted destinations", () => {
@@ -21,5 +21,11 @@ describe("portal action catalog", () => {
   test("publishes closed function schemas", () => {
     expect(portalToolDefinitions).toHaveLength(7);
     expect(portalToolDefinitions.every((entry) => entry.parameters.additionalProperties === false)).toBe(true);
+  });
+
+  test("keeps Responses strict schemas out of the Realtime session payload", () => {
+    expect(portalToolDefinitions.every((entry) => entry.strict === true)).toBe(true);
+    expect(realtimePortalToolDefinitions).toHaveLength(portalToolDefinitions.length);
+    expect(realtimePortalToolDefinitions.every((entry) => !("strict" in entry))).toBe(true);
   });
 });

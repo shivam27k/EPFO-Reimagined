@@ -1,6 +1,6 @@
 import "server-only";
 
-import { portalToolDefinitions } from "@/domain/portal-actions";
+import { realtimePortalToolDefinitions } from "@/domain/portal-actions";
 import { sanitizeMemberMessage } from "./assistant-store";
 import { buildAssistantContext } from "./context";
 import { assistantInstructions } from "./instructions";
@@ -139,7 +139,7 @@ export async function buildRealtimeSessionConfig({
     type: "realtime",
     model: process.env.OPENAI_REALTIME_MODEL?.trim() || DEFAULT_REALTIME_MODEL,
     output_modalities: ["audio"],
-    tools: portalToolDefinitions,
+    tools: realtimePortalToolDefinitions,
     tool_choice: "auto",
     parallel_tool_calls: false,
     audio: {

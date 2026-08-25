@@ -102,3 +102,10 @@ export const portalToolDefinitions = [
   tool("confirm_pending_action", "Confirm the one pending demo action after the member explicitly says yes.", {}),
   tool("cancel_pending_action", "Cancel the one pending demo action after the member says no or cancel.", {}),
 ];
+
+export const realtimePortalToolDefinitions = portalToolDefinitions.map(({ type, name, description, parameters }) => ({
+  type,
+  name,
+  description,
+  parameters,
+}));
