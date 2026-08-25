@@ -89,12 +89,21 @@ describe("assistant response grounding", () => {
     expect(after.snapshot.activeClaim).toEqual(before.snapshot.activeClaim);
   });
 
-  test("low-confidence intent asks a clarifying question and emits no action", async () => {
+  test("low-confidence English intent asks an English clarifying question and emits no action", async () => {
     const reply = await respondToMember({ demoRunId, route: "/overview", message: "hmm" });
 
     expect(reply.intent.confidence).toBeLessThan(0.7);
     expect(reply.actions).toHaveLength(0);
     expect(reply.text).toBe("I’m not sure what you need help with. What would you like to know about this page?");
     expect(reply.text).not.toContain("Bank name does not match Aadhaar");
+  });
+
+  test("low-confidence Devanagari intent asks a Hindi clarifying question", async () => {
+    const reply = await respondToMember({ demoRunId, route: "/overview", message: "मेरा पासबुक समझाइए" });
+
+    expect(reply.intent.confidence).toBeLessThan(0.7);
+    expect(reply.actions).toHaveLength(0);
+    expect(reply.text).toBe("मुझे यक़ीन नहीं है कि आपको किस मदद की ज़रूरत है। आप इस पेज के बारे में क्या जानना चाहते हैं?");
+    expect(reply.text).not.toMatch(/[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/u);
   });
 });

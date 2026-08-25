@@ -14,6 +14,13 @@ export interface AssistantReply {
 }
 
 const LOW_CONFIDENCE_THRESHOLD = 0.7;
+const DEVANAGARI_PATTERN = /[\u0900-\u097F]/u;
+
+function lowConfidenceFallbackText(message: string) {
+  return DEVANAGARI_PATTERN.test(message)
+    ? "मुझे यक़ीन नहीं है कि आपको किस मदद की ज़रूरत है। आप इस पेज के बारे में क्या जानना चाहते हैं?"
+    : "I’m not sure what you need help with. What would you like to know about this page?";
+}
 
 function fallbackText(context: Awaited<ReturnType<typeof buildAssistantContext>>) {
   const blockers = context.findings.filter((finding) => finding.severity === "BLOCKER");
@@ -32,7 +39,7 @@ export async function respondToMember({ demoRunId, route, message }: { demoRunId
 
   if (intent.confidence < LOW_CONFIDENCE_THRESHOLD) {
     return {
-      text: "I’m not sure what you need help with. What would you like to know about this page?",
+      text: lowConfidenceFallbackText(message),
       intent,
       actions: [],
       usedFallback: true,
