@@ -198,6 +198,32 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
     }
 
     let microphone: MediaStream | null = null;
+    let peer: RTCPeerConnection | null = null;
+    let channel: RTCDataChannel | null = null;
+    let audio: HTMLAudioElement | null = null;
+    let negotiation: AbortController | null = null;
+    const closeUnregisteredResources = () => {
+      if (resourcesRef.current?.microphone === microphone) return;
+
+      negotiation?.abort();
+      if (channel) {
+        channel.onopen = null;
+        channel.onmessage = null;
+        channel.onerror = null;
+        channel.onclose = null;
+        channel.close();
+      }
+      if (peer) {
+        peer.ontrack = null;
+        peer.onconnectionstatechange = null;
+        peer.close();
+      }
+      microphone?.getTracks().forEach((track) => track.stop());
+      if (audio) {
+        audio.pause();
+        audio.srcObject = null;
+      }
+    };
     try {
       microphone = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (!activeRef.current || generation !== generationRef.current) {
@@ -205,11 +231,11 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
         return;
       }
 
-      const peer = new RTCPeerConnection();
-      const audio = new Audio();
+      peer = new RTCPeerConnection();
+      audio = new Audio();
       audio.autoplay = true;
-      const channel = peer.createDataChannel("oai-events");
-      const negotiation = new AbortController();
+      channel = peer.createDataChannel("oai-events");
+      negotiation = new AbortController();
       const resources: VoiceResources = {
         peer,
         channel,
@@ -219,8 +245,10 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
         negotiation,
       };
       resourcesRef.current = resources;
+      const registeredPeer = peer;
+      const registeredAudio = audio;
 
-      microphone.getTracks().forEach((track) => peer.addTrack(track, microphone as MediaStream));
+      microphone.getTracks().forEach((track) => registeredPeer.addTrack(track, microphone as MediaStream));
 
       const requestReconnect = () => {
         if (!activeRef.current || generation !== generationRef.current) return;
@@ -233,14 +261,14 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
         fail("Voice could not reconnect. Open text chat or retry voice.");
       };
 
-      peer.ontrack = (event) => {
+      registeredPeer.ontrack = (event) => {
         if (generation !== generationRef.current) return;
         const stream = event.streams[0] ?? new MediaStream([event.track]);
         resources.remoteStream = stream;
-        audio.srcObject = stream;
+        registeredAudio.srcObject = stream;
       };
-      peer.onconnectionstatechange = () => {
-        if (peer.connectionState === "failed" || peer.connectionState === "disconnected") requestReconnect();
+      registeredPeer.onconnectionstatechange = () => {
+        if (registeredPeer.connectionState === "failed" || registeredPeer.connectionState === "disconnected") requestReconnect();
       };
       channel.onmessage = (message) => {
         if (generation !== generationRef.current || typeof message.data !== "string") return;
@@ -286,10 +314,8 @@ export function useAssistantVoice({ active, route }: { active: boolean; route: s
       await peer.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: answerSdp }));
       negotiatedRouteRef.current = negotiatedRoute;
     } catch (caught) {
+      closeUnregisteredResources();
       if (!activeRef.current || generation !== generationRef.current) {
-        if (microphone && resourcesRef.current?.microphone !== microphone) {
-          microphone.getTracks().forEach((track) => track.stop());
-        }
         return;
       }
       if (isPermissionDenied(caught)) {

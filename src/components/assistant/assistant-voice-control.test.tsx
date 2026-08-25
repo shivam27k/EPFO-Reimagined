@@ -37,6 +37,7 @@ class FakeDataChannel {
 
 class FakePeerConnection {
   static instances: FakePeerConnection[] = [];
+  static throwOnDataChannelCreate = false;
   connectionState: RTCPeerConnectionState = "new";
   localDescription: RTCSessionDescriptionInit | null = null;
   onconnectionstatechange: ((event: Event) => void) | null = null;
@@ -58,6 +59,7 @@ class FakePeerConnection {
   }
 
   createDataChannel = vi.fn((label: string) => {
+    if (FakePeerConnection.throwOnDataChannelCreate) throw new Error("channel setup failed");
     expect(label).toBe("oai-events");
     return this.channel as unknown as RTCDataChannel;
   });
@@ -164,6 +166,7 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
   beforeEach(() => {
     FakeDataChannel.instances = [];
     FakePeerConnection.instances = [];
+    FakePeerConnection.throwOnDataChannelCreate = false;
     FakeRemoteAudio.instances = [];
     localTracks.length = 0;
     remoteTrack.stop.mockReset();
@@ -330,6 +333,16 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Microphone permission was denied");
     expect(fetchMock).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Open text chat" })).toBeEnabled();
+  });
+
+  it("releases the microphone and peer if setup fails before resources are registered", async () => {
+    FakePeerConnection.throwOnDataChannelCreate = true;
+    renderControl();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not connect");
+    expect(localTracks[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(FakePeerConnection.instances[0]?.close).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("closes local and remote tracks, data channel, audio, and peer on exit", async () => {
