@@ -36,12 +36,12 @@ describe("Realtime assistant session configuration", () => {
     await testDatabase.cleanup();
   });
 
-  it("enables bidirectional audio with server VAD on the low-cost default model", async () => {
+  it("enables bidirectional audio with server VAD on the instruction-following default model", async () => {
     const config = await buildRealtimeSessionConfig({ demoRunId, route: "/claims" });
 
     expect(config).toMatchObject({
       type: "realtime",
-      model: "gpt-realtime-2.1-mini",
+      model: "gpt-realtime-2.1",
       output_modalities: ["audio"],
       audio: {
         input: {
@@ -78,6 +78,10 @@ describe("Realtime assistant session configuration", () => {
     expect(instructions).not.toContain("1012 3456 7890");
     expect(instructions).not.toContain("PYBOM00424890000012345");
     expect(instructions).not.toContain(demoRunId);
+    expect(instructions).toMatch(/latest (?:user|member) (?:request|question).*primary/i);
+    expect(instructions).toMatch(/different from the current page.*answer/i);
+    expect(instructions).toMatch(/any Hindi.*entire response.*Hindi.*Devanagari/i);
+    expect(instructions).toMatch(/do not begin.*English/i);
   });
 
   it("treats sanitized currently rendered page text as authoritative over stale metadata", async () => {

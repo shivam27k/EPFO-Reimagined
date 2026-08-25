@@ -5,7 +5,7 @@ import { buildAssistantContext } from "./context";
 import { assistantInstructions } from "./instructions";
 
 const REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
-const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini";
+const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1";
 const DEFAULT_TRANSCRIPTION_MODEL = "gpt-transcribe";
 const REALTIME_TRANSCRIPTION_PROMPT = [
   "Transcribe code-switched English and Hindi speech only.",
