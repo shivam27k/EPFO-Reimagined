@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { beforeEach, vi } from "vitest";
 
 import type { MemberSnapshot } from "@/domain/member-snapshot";
+import type { PortalAction, PortalActionResult } from "@/domain/portal-actions";
 import { AssistantPanel } from "./assistant-panel";
 
 type VoiceCaption = {
@@ -14,16 +15,18 @@ type VoiceControlProps = {
   active: boolean;
   contextVersion: string;
   route: string;
+  onToolCall?(action: PortalAction): Promise<PortalActionResult>;
   onExit(): void;
   onReturnToText(captions: VoiceCaption[]): void;
 };
 
 const navigation = vi.hoisted(() => ({ pathname: "/claims" }));
+const routerHarness = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 const voiceHarness = vi.hoisted(() => ({ props: null as VoiceControlProps | null }));
 
 vi.mock("next/navigation", () => ({
   usePathname: () => navigation.pathname,
-  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => routerHarness,
 }));
 
 vi.mock("./assistant-voice-control", () => ({
@@ -91,7 +94,25 @@ function openVoiceMode() {
 describe("AssistantPanel voice integration", () => {
   beforeEach(() => {
     navigation.pathname = "/claims";
+    routerHarness.push.mockReset();
+    routerHarness.refresh.mockReset();
     voiceHarness.props = null;
+  });
+
+  test("keeps voice, the workspace, and the stationary composer together", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    render(<AssistantPanel onViewChange={vi.fn()} snapshot={snapshot()} view="docked" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Talk to EPF Sahayak" }));
+
+    const workspace = screen.getByRole("complementary", { name: "EPF Sahayak workspace" });
+    const voice = screen.getByRole("region", { name: "EPF Sahayak voice mode" });
+    const composer = screen.getByRole("textbox", { name: "Ask EPF Sahayak" });
+
+    expect(workspace).toContainElement(voice);
+    expect(workspace).toContainElement(composer);
+    expect(voice.parentElement).toHaveClass("assistant-workspace-scroll");
+    expect(document.body.querySelectorAll('[aria-label="EPF Sahayak voice mode"]')).toHaveLength(1);
   });
 
   test("passes route changes to the same mounted voice HUD", async () => {
@@ -108,6 +129,63 @@ describe("AssistantPanel voice integration", () => {
     expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBe(voiceHud);
     expect(voiceHud).toHaveAttribute("data-route", "/passbook");
     expect(voiceHarness.props?.route).toBe("/passbook");
+  });
+
+  test("offers an exit to the navigated page after voice navigation in full screen", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    const onViewChange = vi.fn();
+    render(<AssistantPanel onViewChange={onViewChange} snapshot={snapshot()} view="fullscreen" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Talk to EPF Sahayak" }));
+    let result: PortalActionResult | undefined;
+    await act(async () => {
+      result = await voiceHarness.props?.onToolCall?.({
+        name: "navigate_to",
+        arguments: { destination: "profile" },
+      });
+    });
+
+    expect(result).toMatchObject({ status: "completed", route: "/profile" });
+    expect(routerHarness.push).toHaveBeenCalledWith("/profile");
+    fireEvent.click(await screen.findByRole("button", { name: "Exit full screen to view page" }));
+    expect(onViewChange).toHaveBeenCalledWith("docked");
+  });
+
+  test("keeps docked voice available after a completed navigation", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    render(<AssistantPanel snapshot={snapshot()} />);
+
+    openVoiceMode();
+    await act(async () => {
+      await voiceHarness.props?.onToolCall?.({
+        name: "navigate_to",
+        arguments: { destination: "profile" },
+      });
+    });
+
+    expect(screen.getByRole("complementary", { name: "EPF Sahayak workspace" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBeInTheDocument();
+  });
+
+  test("shows the returned failure message for a failed voice tool", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/assistant") return historyResponse();
+      return { ok: false, json: async () => ({ error: "The returned failure text." }) };
+    }));
+    render(<AssistantPanel onViewChange={vi.fn()} snapshot={snapshot()} view="docked" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Talk to EPF Sahayak" }));
+    await act(async () => {
+      await voiceHarness.props?.onToolCall?.({
+        name: "propose_demo_action",
+        arguments: { action: "simulate_bank_payment" },
+      });
+    });
+    await act(async () => {
+      await voiceHarness.props?.onToolCall?.({ name: "confirm_pending_action", arguments: {} });
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("The returned failure text.");
   });
 
   test("changes the voice grounding version when router refresh supplies new member state", async () => {

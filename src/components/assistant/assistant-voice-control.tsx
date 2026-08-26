@@ -55,12 +55,9 @@ export function AssistantVoiceControl(props: AssistantVoiceControlProps) {
   return (
     <section aria-label="EPF Sahayak voice mode" className="assistant-voice-control" data-state={voice.state}>
       <header className="assistant-voice-hud-header">
-        <p>EPF Sahayak <span>Voice</span></p>
-      </header>
-      <div className="assistant-voice-presence">
         <div aria-label="EPF Sahayak microphone" className="assistant-voice-orb" role="img"><Mic aria-hidden="true" size={30} /></div>
-        <strong aria-live="polite" className="assistant-voice-status" role="status">{statusLabel[voice.state]}</strong>
-      </div>
+        <div><p>EPF Sahayak <span>Voice</span></p><strong aria-live="polite" className="assistant-voice-status" role="status">{statusLabel[voice.state]}</strong></div>
+      </header>
       <div aria-label="Voice caption" className="assistant-voice-caption" ref={captionRef} role="group">
         {!voice.transcript && !voice.answer && !voice.error ? <p>Speak naturally about this page. You can interrupt while EPF Sahayak is speaking.</p> : null}
         {voice.transcript ? <p><strong>You said:</strong> <SafeBilingualText text={voice.transcript} /></p> : null}
