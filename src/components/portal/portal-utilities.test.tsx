@@ -13,15 +13,17 @@ vi.mock("@/components/assistant/assistant-panel", () => ({
     onViewChange,
     onVoiceActiveChange,
     modal,
+    snapshot,
     view,
   }: {
     contextStale?: boolean;
     onViewChange?(view: "collapsed" | "docked" | "fullscreen"): void;
     onVoiceActiveChange?(active: boolean): void;
     modal?: boolean;
+    snapshot?: MemberSnapshot;
     view?: string;
   }) => (
-    <div data-context-stale={contextStale} data-modal={modal} data-view={view}>
+    <div className="assistant-area" data-context-name={snapshot?.profile.displayName} data-context-stale={contextStale} data-modal={modal} data-view={view}>
       <button onClick={() => onViewChange?.("docked")} type="button">Ask EPF Sahayak</button>
       <button onClick={() => onViewChange?.("fullscreen")} type="button">Maximize assistant</button>
       <button onClick={() => onViewChange?.("collapsed")} type="button">Collapse assistant</button>
@@ -31,7 +33,7 @@ vi.mock("@/components/assistant/assistant-panel", () => ({
   ),
 }));
 vi.mock("@/components/demo/scenario-drawer", () => ({
-  ScenarioDrawer: ({ open }: { open: boolean }) => <div data-scenario-open={open} />,
+  ScenarioDrawer: ({ open }: { open: boolean }) => <div className="utility-drawer scenario-drawer" data-scenario-open={open} />,
 }));
 
 function snapshot(overrides: Partial<MemberSnapshot> = {}): MemberSnapshot {
@@ -190,11 +192,14 @@ describe("PortalUtilities", () => {
 
   test("does not replace a post-navigation snapshot with a delayed old-route refresh", async () => {
     let resolveRefresh!: (response: { ok: boolean; json(): Promise<MemberSnapshot> }) => void;
-    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise((resolve) => {
-      resolveRefresh = resolve;
-    })));
     const oldSnapshot = snapshot({ nextAction: { label: "Old route action", href: "/overview" } });
     const currentSnapshot = snapshot({ nextAction: { label: "Current route action", href: "/passbook" } });
+    let request = 0;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => {
+      request += 1;
+      if (request === 1) return new Promise((resolve) => { resolveRefresh = resolve; });
+      return Promise.resolve({ ok: true, json: async () => currentSnapshot });
+    }));
     const { rerender } = render(<PortalUtilities snapshot={oldSnapshot} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Your EPF journey" }));
@@ -211,6 +216,48 @@ describe("PortalUtilities", () => {
     });
 
     expect(document.querySelector("#journey-utility-panel a")).toHaveTextContent("Current route action");
+  });
+
+  test("refreshes authoritative assistant context on every pathname change and ignores the stale route response", async () => {
+    const pending: Array<(response: { ok: boolean; json(): Promise<MemberSnapshot> }) => void> = [];
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => new Promise((resolve) => pending.push(resolve))));
+    const firstRoute = snapshot({ profile: { ...snapshot().profile, displayName: "First route" } });
+    const secondRoute = snapshot({ profile: { ...snapshot().profile, displayName: "Second route" } });
+    const { rerender } = render(<PortalUtilities snapshot={firstRoute} />);
+
+    pathname = "/profile";
+    rerender(<PortalUtilities snapshot={secondRoute} />);
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    pathname = "/passbook";
+    rerender(<PortalUtilities snapshot={secondRoute} />);
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      pending[1]?.({ ok: true, json: async () => secondRoute });
+      await Promise.resolve();
+      pending[0]?.({ ok: true, json: async () => firstRoute });
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector(".assistant-area")).toHaveAttribute("data-context-name", "Second route");
+  });
+
+  test("arbitrates inert utility layers so only the active modal remains interactive", async () => {
+    render(<><aside className="portal-sidebar" /><main className="portal-stage" /><nav className="mobile-navigation" /><PortalUtilities snapshot={snapshot()} /></>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
+    fireEvent.click(screen.getByRole("button", { name: "Your EPF journey" }));
+    expect(document.querySelector<HTMLElement>(".assistant-area")?.inert).toBe(true);
+    expect(document.querySelector<HTMLElement>(".utility-edge-rail")?.inert).toBe(true);
+    expect(document.querySelector<HTMLElement>("#journey-utility-panel")?.inert).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Maximize assistant" }));
+    await waitFor(() => {
+      expect(document.querySelector<HTMLElement>(".assistant-area")?.inert).toBe(false);
+    });
+    expect(document.querySelector<HTMLElement>(".utility-edge-rail")?.inert).toBe(true);
+    expect(document.querySelector<HTMLElement>("#journey-utility-panel")?.inert).toBe(true);
+    expect(document.querySelector<HTMLElement>(".scenario-drawer")?.inert).toBe(true);
   });
 
   test("marks the utility rail while voice mode is active", () => {

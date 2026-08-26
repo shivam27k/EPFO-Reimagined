@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   persistAssistantWorkspaceView,
   readAssistantWorkspaceView,
+  readServerAssistantWorkspaceView,
 } from "./assistant-workspace-state";
 
 describe("assistant workspace state", () => {
@@ -19,5 +20,9 @@ describe("assistant workspace state", () => {
       },
     });
     expect(saved).toBe("docked");
+  });
+
+  test("uses a stable collapsed snapshot for server rendering", () => {
+    expect(readServerAssistantWorkspaceView()).toBe("collapsed");
   });
 });

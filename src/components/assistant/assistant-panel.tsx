@@ -120,6 +120,9 @@ export function AssistantPanel({
   const workspaceRef = useRef<HTMLElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const extractionGeneration = useRef(0);
+  const documentHydrationGeneration = useRef(0);
+  const textRequestController = useRef<AbortController | null>(null);
+  const textRequestGeneration = useRef(0);
   const validationCounts = useRef<Record<string, number>>({});
   const [internalView, setInternalView] = useState<AssistantWorkspaceView>("collapsed");
   const [voiceActive, setVoiceActive] = useState(false);
@@ -187,7 +190,10 @@ export function AssistantPanel({
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
-        if (voiceActive) return;
+        if (voiceActive) {
+          if (workspaceView === "fullscreen" && !modal) changeView("docked");
+          return;
+        }
         changeView(modal ? "collapsed" : "docked");
         return;
       }
@@ -223,17 +229,20 @@ export function AssistantPanel({
         document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)?.focus();
       });
     };
-  }, [changeView, modal, voiceActive, workspaceModal]);
+  }, [changeView, modal, voiceActive, workspaceModal, workspaceView]);
 
   useEffect(() => {
     let active = true;
+    const hydrationGeneration = documentHydrationGeneration.current;
     fetch("/api/assistant").then(async (response) => ({ response, body: await readJson(response) })).then(({ response, body }) => {
       if (!active) return;
       if (!response.ok) throw new Error(String(body.error ?? "Assistant history could not be loaded."));
       const history = Array.isArray(body.messages) ? body.messages as Message[] : [];
       setMessages((current) => mergeMessageHistory(history, current));
       setDismissed(Array.isArray(body.dismissedPromptKeys) ? body.dismissedPromptKeys as string[] : []);
-      setProposals(Array.isArray(body.formPatchProposal) ? body.formPatchProposal as FormFieldProposal[] : []);
+      if (hydrationGeneration === documentHydrationGeneration.current) {
+        setProposals(Array.isArray(body.formPatchProposal) ? body.formPatchProposal as FormFieldProposal[] : []);
+      }
     }).catch((error) => active && setPanelError(error instanceof Error ? error.message : "Assistant history could not be loaded.")).finally(() => active && setHistoryLoading(false));
     return () => { active = false; };
   }, []);
@@ -262,6 +271,12 @@ export function AssistantPanel({
     return () => window.clearTimeout(timer);
   }, [pathname]);
 
+  useEffect(() => {
+    textRequestController.current?.abort();
+    textRequestGeneration.current += 1;
+    textRequestController.current = null;
+  }, [pathname, voiceContextVersion]);
+
   async function handlePortalAction(action: PortalAction): Promise<PortalActionResult> {
     const result = await executePortalAction(action, {
       pathname,
@@ -274,7 +289,6 @@ export function AssistantPanel({
     if (result.status === "failed") setPanelError(result.message);
     if (result.status === "completed" && (action.name === "navigate_to" || action.name === "start_workflow")) {
       if (workspaceView === "fullscreen") setNavigationCompletedInFullscreen(true);
-      else if (!voiceActive) closeAssistant();
     }
     return result;
   }
@@ -302,20 +316,41 @@ export function AssistantPanel({
     setInput(""); setPending(true); setPanelError("");
     if (!voiceActive) openAssistant();
     setMessages((current) => [...current, { role: "member", text: trimmed }]);
+    const controller = new AbortController();
+    const generation = ++textRequestGeneration.current;
+    textRequestController.current?.abort();
+    textRequestController.current = controller;
+    const abortFromCaller = () => controller.abort();
+    const clearPendingOnAbort = () => {
+      if (generation === textRequestGeneration.current) setPending(false);
+    };
+    controller.signal.addEventListener("abort", clearPendingOnAbort, { once: true });
+    signal?.addEventListener("abort", abortFromCaller, { once: true });
+    if (signal?.aborted) controller.abort();
     try {
-      const response = await fetch("/api/assistant", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: trimmed, route: pathname, visibleScreenText: captureVisibleScreenText() }), signal });
+      const response = await fetch("/api/assistant", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: trimmed, route: pathname, visibleScreenText: captureVisibleScreenText() }), signal: controller.signal });
       const result = await readJson(response);
-      if (signal?.aborted) return null;
+      if (controller.signal.aborted || generation !== textRequestGeneration.current) return null;
       if (!response.ok) throw new Error(String(result.error ?? "Assistant response could not be loaded."));
       const text = String(result.text ?? "I could not explain that yet.");
       setMessages((current) => [...current, { role: "assistant", text, source: result.usedFallback ? "fallback" : "openai", actions: Array.isArray(result.actions) ? result.actions as AssistantActionProposal[] : [] }]);
       const portalActions = Array.isArray(result.portalActions) ? result.portalActions as PortalAction[] : [];
-      for (const action of portalActions) await handlePortalAction(action);
+      for (const action of portalActions) {
+        if (controller.signal.aborted || generation !== textRequestGeneration.current) return null;
+        await handlePortalAction(action);
+      }
       return { text };
     } catch (error) {
-      if (!signal?.aborted) setPanelError(error instanceof Error ? error.message : "Assistant unavailable. Use the visible page actions to continue.");
+      if (!controller.signal.aborted && generation === textRequestGeneration.current) setPanelError(error instanceof Error ? error.message : "Assistant unavailable. Use the visible page actions to continue.");
       return null;
-    } finally { setPending(false); }
+    } finally {
+      signal?.removeEventListener("abort", abortFromCaller);
+      controller.signal.removeEventListener("abort", clearPendingOnAbort);
+      if (generation === textRequestGeneration.current) {
+        setPending(false);
+        if (textRequestController.current === controller) textRequestController.current = null;
+      }
+    }
   }
 
   async function resolvePendingPortalAction(confirm: boolean) {
@@ -329,7 +364,8 @@ export function AssistantPanel({
       try { await persistState(proposalState); } catch { setPanelError("The proposal decision could not be recorded. No account data changed."); return; }
     } else if (action.type === "NAVIGATE" && action.payload.href?.startsWith("/")) {
       try { await persistState(proposalState); } catch { setPanelError("The proposal decision could not be recorded. No account data changed."); return; }
-      router.push(action.payload.href); closeAssistant();
+      router.push(action.payload.href);
+      if (workspaceView === "fullscreen") setNavigationCompletedInFullscreen(true);
     } else if (action.type === "APPLY_DEMO_CORRECTION") {
       const isEmployment = action.payload.correction === "EMPLOYMENT_EXIT_DATE" && action.payload.employmentId?.startsWith("employment:");
       const isBank = action.payload.correction === "BANK_NAME";
@@ -361,6 +397,7 @@ export function AssistantPanel({
     const file = fileRef.current?.files?.[0];
     if (!file) { setExtractionMessage("Choose a synthetic PDF, JPEG, or PNG first."); return; }
     if (!syntheticAccepted) { setExtractionMessage("Confirm that this file contains synthetic demo data only."); return; }
+    documentHydrationGeneration.current += 1;
     const generation = ++extractionGeneration.current;
     setExtractionPending(true); setExtractionMessage(""); setProposals([]);
     const data = new FormData(); data.set("document", file); data.set("documentKind", documentKind); data.set("syntheticDisclosureAccepted", "true");
@@ -385,6 +422,7 @@ export function AssistantPanel({
 
   const scopedProposals = patchScope === "FIELD" ? proposals.slice(0, 1) : proposals;
   function clearDocumentReview(message = "") {
+    documentHydrationGeneration.current += 1;
     setDocumentKind("BANK_STATEMENT");
     setSyntheticAccepted(false);
     setProposals([]);
@@ -457,9 +495,9 @@ export function AssistantPanel({
         </div>
         {panelError ? <p className="assistant-error" role="alert">{panelError}</p> : null}
         {documentOpen ? <section aria-label="Synthetic document review" className="document-assist" id="assistant-document-review"><header className="document-assist-header"><FileSearch aria-hidden="true" size={18} /><span><strong>Review a synthetic document</strong><small>Produces proposals only</small></span><button className="text-action" onClick={cancelDocumentReview} type="button">Cancel review</button></header><form onSubmit={extractDocument}>
-          <label>Document type<select value={documentKind} onChange={(event) => setDocumentKind(event.target.value)}><option value="IDENTITY_RETURN">Simulated identity return</option><option value="JOINING_LETTER">Synthetic joining letter</option><option value="PAN_CARD">Synthetic PAN card</option><option value="BANK_STATEMENT">Synthetic bank statement</option></select></label>
-          <label>Choose PDF, JPEG, or PNG (max 5 MB)<input ref={fileRef} accept="application/pdf,image/jpeg,image/png" type="file" /></label>
-          <label className="synthetic-confirm"><input checked={syntheticAccepted} onChange={(event) => setSyntheticAccepted(event.target.checked)} type="checkbox" /><span>This file is entirely synthetic and contains no real identity, bank, or government data.</span></label>
+          <label>Document type<select value={documentKind} onChange={(event) => { documentHydrationGeneration.current += 1; setDocumentKind(event.target.value); }}><option value="IDENTITY_RETURN">Simulated identity return</option><option value="JOINING_LETTER">Synthetic joining letter</option><option value="PAN_CARD">Synthetic PAN card</option><option value="BANK_STATEMENT">Synthetic bank statement</option></select></label>
+          <label>Choose PDF, JPEG, or PNG (max 5 MB)<input ref={fileRef} accept="application/pdf,image/jpeg,image/png" onChange={() => { documentHydrationGeneration.current += 1; }} type="file" /></label>
+          <label className="synthetic-confirm"><input checked={syntheticAccepted} onChange={(event) => { documentHydrationGeneration.current += 1; setSyntheticAccepted(event.target.checked); }} type="checkbox" /><span>This file is entirely synthetic and contains no real identity, bank, or government data.</span></label>
           <button className="secondary-action" disabled={extractionPending || !syntheticAccepted} type="submit">{extractionPending ? "Reviewing…" : "Create review proposals"}</button>
         </form>{extractionMessage ? <p className="extraction-feedback" role="status">{extractionMessage}</p> : null}{proposals.length > 0 ? pathname === "/onboarding" && snapshot.persona === "NEW_MEMBER" ? <><div className="patch-scope" aria-label="Apply scope"><button aria-pressed={patchScope === "FIELD"} disabled={extractionPending} onClick={() => setPatchScope("FIELD")} type="button">One field</button><button aria-pressed={patchScope === "SECTION"} disabled={extractionPending} onClick={() => setPatchScope("SECTION")} type="button">This section</button><button aria-pressed={patchScope === "WHOLE_FORM"} disabled={extractionPending} onClick={() => setPatchScope("WHOLE_FORM")} type="button">All extracted</button></div><FormPatchReview proposals={scopedProposals} scope={patchScope} pending={patchPending || extractionPending} onConfirm={applyPatch} onCancel={cancelDocumentReview} /></> : <section aria-label="Review extracted document" className="document-review-only"><div className="patch-list">{proposals.map((proposal) => <article className="patch-row" key={proposal.field}><div className="patch-heading"><strong>{proposal.label}</strong><span data-validation={proposal.validation}>{proposal.validation === "VALID" ? "Reviewed" : "Check value"}</span></div><dl><div><dt>Existing</dt><dd>{proposal.existingValue || "Not saved"}</dd></div><div><dt>Proposed</dt><dd>{proposal.sensitive ? "•••• " : ""}{proposal.proposedValue}</dd></div><div><dt>Source</dt><dd>{proposal.source}</dd></div><div><dt>Confidence</dt><dd>{Math.round(proposal.confidence * 100)}%</dd></div></dl></article>)}</div><p className="document-review-guidance">I can review this synthetic document here. Open new-member setup before applying extracted values to a form.</p></section> : null}</section> : null}
         </div>

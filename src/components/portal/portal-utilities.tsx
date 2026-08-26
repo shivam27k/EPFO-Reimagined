@@ -2,12 +2,14 @@
 
 import { FlaskConical, MapPinned, X } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { AssistantPanel } from "@/components/assistant/assistant-panel";
 import {
   persistAssistantWorkspaceView,
   readAssistantWorkspaceView,
+  readServerAssistantWorkspaceView,
+  subscribeAssistantWorkspaceView,
   type AssistantWorkspaceView,
 } from "@/components/assistant/assistant-workspace-state";
 import { ScenarioDrawer } from "@/components/demo/scenario-drawer";
@@ -51,9 +53,13 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
     pathname,
     active: null,
   });
-  const [assistantView, setAssistantView] = useState<AssistantWorkspaceView>(() => (
-    typeof window === "undefined" ? "collapsed" : readAssistantWorkspaceView()
-  ));
+  const persistedAssistantView = useSyncExternalStore(
+    subscribeAssistantWorkspaceView,
+    readAssistantWorkspaceView,
+    readServerAssistantWorkspaceView,
+  );
+  const [assistantViewOverride, setAssistantViewOverride] = useState<AssistantWorkspaceView | null>(null);
+  const assistantView = assistantViewOverride ?? persistedAssistantView;
   const [voiceActive, setVoiceActive] = useState(false);
   const responsiveAssistant = useSyncExternalStore(
     subscribeToResponsiveAssistant,
@@ -61,45 +67,54 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
     readServerResponsiveAssistant,
   );
   const [refreshedContext, setRefreshedContext] = useState<{
+    pathname: string;
     source: MemberSnapshot;
     snapshot: MemberSnapshot;
     stale: boolean;
   } | null>(null);
   const lastTrigger = useRef<HTMLButtonElement | null>(null);
   const refreshController = useRef<AbortController | null>(null);
+  const refreshGeneration = useRef(0);
+  const previousPathname = useRef(pathname);
   const active = utilityState.pathname === pathname ? utilityState.active : null;
-  const currentContext = refreshedContext?.source === snapshot
+  const currentContext = refreshedContext?.pathname === pathname && refreshedContext.source === snapshot
     ? refreshedContext
-    : { source: snapshot, snapshot, stale: false };
+    : { pathname, source: snapshot, snapshot, stale: false };
   const utilitySnapshot = currentContext.snapshot;
   const contextStale = currentContext.stale;
   const responsiveAssistantModal = responsiveAssistant && assistantView !== "collapsed";
   const assistantModal = assistantView === "fullscreen" || responsiveAssistantModal;
 
   useEffect(() => {
-    refreshController.current?.abort();
-  }, [pathname]);
-
-  useEffect(() => {
-    if (!assistantModal) return;
-
-    const background = document.querySelectorAll<HTMLElement>(
+    const background = Array.from(document.querySelectorAll<HTMLElement>(
       ".portal-sidebar, .portal-stage, .mobile-navigation",
-    );
-    background.forEach((element) => { element.inert = true; });
+    ));
+    const rail = document.querySelector<HTMLElement>(".utility-edge-rail");
+    const backdrop = document.querySelector<HTMLElement>(".utility-backdrop");
+    const assistant = document.querySelector<HTMLElement>(".assistant-area");
+    const drawers = Array.from(document.querySelectorAll<HTMLElement>(".utility-drawer"));
+    const portalBlocked = assistantModal || active !== null;
+
+    background.forEach((element) => { element.inert = portalBlocked; });
+    if (rail) rail.inert = portalBlocked;
+    if (backdrop) backdrop.inert = assistantModal;
+    if (assistant) assistant.inert = active !== null && !assistantModal;
+    drawers.forEach((drawer) => {
+      const drawerIsActive = active !== null && drawer.dataset.utilityPanel === active;
+      drawer.inert = assistantModal || !drawerIsActive;
+    });
 
     return () => {
       background.forEach((element) => { element.inert = false; });
+      if (rail) rail.inert = false;
+      if (backdrop) backdrop.inert = false;
+      if (assistant) assistant.inert = false;
+      drawers.forEach((drawer) => { drawer.inert = false; });
     };
-  }, [assistantModal]);
+  }, [active, assistantModal]);
 
   useEffect(() => {
-    if (!active) return;
-
-    const background = document.querySelectorAll<HTMLElement>(
-      ".portal-sidebar, .portal-stage, .mobile-navigation",
-    );
-    background.forEach((element) => { element.inert = true; });
+    if (!active || assistantModal) return;
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
@@ -134,11 +149,11 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      background.forEach((element) => { element.inert = false; });
     };
-  }, [active, pathname]);
+  }, [active, assistantModal, pathname]);
 
   useEffect(() => {
+    if (assistantModal) return;
     if (!active) {
       lastTrigger.current?.focus();
       return;
@@ -149,39 +164,53 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
         .querySelector<HTMLButtonElement>(`[data-utility-panel="${active}"] [data-utility-close]`)
         ?.focus();
     });
-  }, [active]);
+  }, [active, assistantModal]);
 
-  async function refreshUtilitySnapshot() {
+  const refreshUtilitySnapshot = useCallback(async () => {
     const controller = new AbortController();
+    const generation = ++refreshGeneration.current;
     refreshController.current?.abort();
     refreshController.current = controller;
 
     try {
       const response = await fetch("/api/member/snapshot", { cache: "no-store", signal: controller.signal });
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || generation !== refreshGeneration.current) return;
       if (!response.ok) {
         setRefreshedContext((current) => ({
+          pathname,
           source: snapshot,
-          snapshot: current?.source === snapshot ? current.snapshot : snapshot,
+          snapshot: current?.pathname === pathname && current.source === snapshot ? current.snapshot : snapshot,
           stale: true,
         }));
         return;
       }
       const refreshedSnapshot = await response.json() as MemberSnapshot;
-      if (controller.signal.aborted) return;
-      setRefreshedContext({ source: snapshot, snapshot: refreshedSnapshot, stale: false });
+      if (controller.signal.aborted || generation !== refreshGeneration.current) return;
+      setRefreshedContext({ pathname, source: snapshot, snapshot: refreshedSnapshot, stale: false });
     } catch {
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && generation === refreshGeneration.current) {
         setRefreshedContext((current) => ({
+          pathname,
           source: snapshot,
-          snapshot: current?.source === snapshot ? current.snapshot : snapshot,
+          snapshot: current?.pathname === pathname && current.source === snapshot ? current.snapshot : snapshot,
           stale: true,
         }));
       }
     } finally {
       if (refreshController.current === controller) refreshController.current = null;
     }
-  }
+  }, [pathname, snapshot]);
+
+  useEffect(() => {
+    if (previousPathname.current === pathname) return;
+    previousPathname.current = pathname;
+    void refreshUtilitySnapshot();
+  }, [pathname, refreshUtilitySnapshot]);
+
+  useEffect(() => () => {
+    refreshGeneration.current += 1;
+    refreshController.current?.abort();
+  }, []);
 
   function toggle(next: ActiveUtility, trigger?: HTMLButtonElement) {
     if (trigger) lastTrigger.current = trigger;
@@ -198,7 +227,7 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
 
   function changeAssistantView(view: AssistantWorkspaceView) {
     if (view === "docked" && assistantView === "collapsed") void refreshUtilitySnapshot();
-    setAssistantView(view);
+    setAssistantViewOverride(view);
     persistAssistantWorkspaceView(view);
   }
 

@@ -136,6 +136,33 @@ describe("AssistantPanel voice integration", () => {
     expect(voiceHarness.props?.route).toBe("/passbook");
   });
 
+  test("drops a delayed text response and its actions after the screen context changes", async () => {
+    let resolveReply!: (response: ReturnType<typeof assistantResponse>) => void;
+    const delayedReply = new Promise<ReturnType<typeof assistantResponse>>((resolve) => { resolveReply = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") return delayedReply;
+      return historyResponse();
+    }));
+    const { rerender } = render(<AssistantPanel snapshot={snapshot()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask EPF Sahayak" }), { target: { value: "Take me to profile" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    navigation.pathname = "/passbook";
+    rerender(<AssistantPanel snapshot={snapshot()} />);
+    await waitFor(() => expect(screen.getByRole("region", { name: "EPF Sahayak conversation" })).toHaveAttribute("aria-busy", "false"));
+    await act(async () => {
+      resolveReply(assistantResponse({
+        text: "Opening profile",
+        portalActions: [{ name: "navigate_to", arguments: { destination: "profile" } }],
+      }));
+      await delayedReply;
+    });
+
+    expect(screen.queryByText("Opening profile")).not.toBeInTheDocument();
+    expect(routerHarness.push).not.toHaveBeenCalled();
+  });
+
   test("offers an exit to the navigated page after voice navigation in full screen", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
     const onViewChange = vi.fn();
@@ -171,6 +198,41 @@ describe("AssistantPanel voice integration", () => {
 
     expect(screen.getByRole("complementary", { name: "EPF Sahayak workspace" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBeInTheDocument();
+  });
+
+  test("keeps the docked text workspace open after assistant navigation", async () => {
+    const onViewChange = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") return assistantResponse({
+        text: "Opening profile",
+        portalActions: [{ name: "navigate_to", arguments: { destination: "profile" } }],
+      });
+      return historyResponse();
+    }));
+    render(<AssistantPanel onViewChange={onViewChange} snapshot={snapshot()} view="docked" />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask EPF Sahayak" }), { target: { value: "Open profile" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(routerHarness.push).toHaveBeenCalledWith("/profile"));
+    expect(onViewChange).not.toHaveBeenCalledWith("collapsed");
+  });
+
+  test("keeps the docked workspace open after confirming a navigation card", async () => {
+    const onViewChange = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") return assistantResponse({ ok: true });
+      return historyResponse([{
+        role: "assistant",
+        text: "I can open your profile.",
+        actions: [{ type: "NAVIGATE", label: "Open profile", payload: { href: "/profile" }, requiresConfirmation: true }],
+      }]);
+    }));
+    render(<AssistantPanel onViewChange={onViewChange} snapshot={snapshot()} view="docked" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm action" }));
+
+    await waitFor(() => expect(routerHarness.push).toHaveBeenCalledWith("/profile"));
+    expect(onViewChange).not.toHaveBeenCalledWith("collapsed");
   });
 
   test("requires ending voice before the workspace can collapse", () => {
@@ -412,6 +474,18 @@ describe("AssistantPanel workspace shell", () => {
     expect(screen.getByRole("button", { name: "End voice mode" })).toBeInTheDocument();
   });
 
+  test("downgrades desktop full screen to docked on Escape while voice remains active", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    const onViewChange = vi.fn();
+    render(<AssistantPanel onViewChange={onViewChange} snapshot={snapshot()} view="fullscreen" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Talk to EPF Sahayak" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(onViewChange).toHaveBeenCalledWith("docked");
+    expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBeInTheDocument();
+  });
+
   test("keeps optional workspace content inside one scroll region above the stationary composer", () => {
     vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
     render(<AssistantPanel onViewChange={vi.fn()} snapshot={snapshot()} view="docked" />);
@@ -538,6 +612,24 @@ describe("AssistantPanel synthetic document workspace", () => {
     expect(screen.queryByText("Rohan K Mehta")).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Document type" })).toHaveValue("BANK_STATEMENT");
     expect(screen.getByRole("checkbox", { name: /This file is entirely synthetic/ })).not.toBeChecked();
+  });
+
+  test("does not let delayed initial history resurrect a locally cancelled proposal", async () => {
+    let resolveHistory!: (response: ReturnType<typeof assistantResponse>) => void;
+    const delayedHistory = new Promise<ReturnType<typeof assistantResponse>>((resolve) => { resolveHistory = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async () => delayedHistory));
+    render(<AssistantPanel snapshot={snapshot()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
+    fireEvent.click(screen.getByRole("button", { name: "Attach synthetic document" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel review" }));
+    await act(async () => {
+      resolveHistory(assistantResponse({ messages: [], dismissedPromptKeys: [], formPatchProposal: [bankProposal] }));
+      await delayedHistory;
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Attach synthetic document" }));
+    expect(screen.queryByText("Rohan K Mehta")).not.toBeInTheDocument();
   });
 
   test("disables prior proposal application while a replacement extraction is pending", async () => {
