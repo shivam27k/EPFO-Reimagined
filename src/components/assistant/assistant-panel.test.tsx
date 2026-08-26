@@ -137,6 +137,7 @@ describe("AssistantPanel voice integration", () => {
     render(<AssistantPanel onViewChange={onViewChange} snapshot={snapshot()} view="fullscreen" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Talk to EPF Sahayak" }));
+    expect(screen.getByRole("button", { name: "Exit EPF Sahayak full screen" })).toBeEnabled();
     let result: PortalActionResult | undefined;
     await act(async () => {
       result = await voiceHarness.props?.onToolCall?.({
@@ -165,6 +166,23 @@ describe("AssistantPanel voice integration", () => {
 
     expect(screen.getByRole("complementary", { name: "EPF Sahayak workspace" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBeInTheDocument();
+  });
+
+  test("requires ending voice before the workspace can collapse", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    render(<AssistantPanel snapshot={snapshot()} />);
+
+    openVoiceMode();
+    const collapse = screen.getByRole("button", { name: "Collapse EPF Sahayak" });
+    expect(collapse).toBeDisabled();
+    expect(collapse).toHaveAttribute("title", "End voice mode before collapsing EPF Sahayak.");
+
+    fireEvent.click(screen.getByRole("button", { name: "End voice mode" }));
+    expect(collapse).toBeEnabled();
+    fireEvent.click(collapse);
+    expect(screen.getByRole("button", { name: "Ask EPF Sahayak" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
+    expect(screen.getByRole("complementary", { name: "EPF Sahayak workspace" })).toBeVisible();
   });
 
   test("shows the returned failure message for a failed voice tool", async () => {
