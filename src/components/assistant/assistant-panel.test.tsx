@@ -233,4 +233,17 @@ describe("AssistantPanel workspace shell", () => {
 
     expect(screen.getByText("Context refresh failed; showing the last verified demo record.")).toBeInTheDocument();
   });
+
+  test("keeps optional workspace content inside one scroll region above the stationary composer", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    render(<AssistantPanel onViewChange={vi.fn()} snapshot={snapshot()} view="docked" />);
+
+    const workspace = screen.getByRole("complementary", { name: "EPF Sahayak workspace" });
+    const scrollRegion = screen.getByRole("region", { name: "EPF Sahayak workspace content" });
+    const conversation = screen.getByRole("region", { name: "EPF Sahayak conversation" });
+    const composer = workspace.querySelector(".assistant-form");
+
+    expect(scrollRegion).toContainElement(conversation);
+    expect(scrollRegion.nextElementSibling).toBe(composer);
+  });
 });

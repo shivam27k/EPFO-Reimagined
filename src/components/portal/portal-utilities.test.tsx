@@ -121,6 +121,23 @@ describe("PortalUtilities", () => {
     });
   });
 
+  test("clears stale context when a route provides a new authoritative snapshot", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    const { rerender } = render(<PortalUtilities snapshot={snapshot()} />);
+    const assistant = screen.getByRole("button", { name: "Ask EPF Sahayak" }).parentElement;
+
+    fireEvent.click(screen.getByRole("button", { name: "Your EPF journey" }));
+    await waitFor(() => {
+      expect(assistant).toHaveAttribute("data-context-stale", "true");
+    });
+
+    rerender(<PortalUtilities snapshot={snapshot({ nextAction: { label: "Review contributions", href: "/passbook" } })} />);
+
+    await waitFor(() => {
+      expect(assistant).toHaveAttribute("data-context-stale", "false");
+    });
+  });
+
   test("does not replace a post-navigation snapshot with a delayed old-route refresh", async () => {
     let resolveRefresh!: (response: { ok: boolean; json(): Promise<MemberSnapshot> }) => void;
     vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise((resolve) => {

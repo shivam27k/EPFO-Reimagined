@@ -40,6 +40,7 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
 
   useEffect(() => {
     setUtilitySnapshot(snapshot);
+    setContextStale(false);
   }, [snapshot]);
 
   useEffect(() => {
