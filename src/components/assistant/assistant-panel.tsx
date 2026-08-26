@@ -175,6 +175,11 @@ export function AssistantPanel({
     const workspace = workspaceRef.current;
     if (workspace === null) return;
     const focusContainer: HTMLElement = workspace;
+    const focusFrame = window.requestAnimationFrame(() => {
+      const firstFocusable = Array.from(focusContainer.querySelectorAll<HTMLElement>(focusableSelector))
+        .find((element) => element.getClientRects().length > 0);
+      (firstFocusable ?? focusContainer).focus();
+    });
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
@@ -205,7 +210,15 @@ export function AssistantPanel({
     }
 
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", onKeyDown);
+      window.requestAnimationFrame(() => {
+        workspace
+          .querySelector<HTMLButtonElement>('[aria-label="Open EPF Sahayak full screen"]')
+          ?.focus();
+      });
+    };
   }, [changeView, workspaceView]);
 
   useEffect(() => {
@@ -435,7 +448,7 @@ export function AssistantPanel({
           {historyLoading ? <div className="assistant-empty"><Sparkles aria-hidden="true" size={18} /> Loading this run’s conversation…</div> : null}
           {!historyLoading && messages.length === 0 ? <div className="assistant-empty">Ask about this page, a status, or the safest next action.</div> : null}
           {messages.map((message, index) => <div key={`${message.role}-${index}-${message.text}`}><AssistantMessage role={message.role} source={message.source} text={message.text} />{message.actions?.map((action) => <div className="assistant-action-card" key={`${action.type}-${action.label}`}><strong>{action.label}</strong><p>Nothing changes until you confirm.</p><div><button className="primary-action" onClick={() => decideAction(action, "CONFIRMED")} type="button">Confirm action</button><button className="secondary-action" onClick={() => decideAction(action, "REJECTED")} type="button">Keep unchanged</button></div></div>)}</div>)}
-          {pendingPortalAction ? <div className="assistant-action-card" role="status"><strong>{describePortalAction(pendingPortalAction)}</strong><p>Nothing changes until you confirm.</p><div><button className="primary-action" disabled={pending} onClick={() => resolvePendingPortalAction(true)} type="button">Confirm action</button><button className="secondary-action" disabled={pending} onClick={() => resolvePendingPortalAction(false)} type="button">Cancel</button></div></div> : null}
+          {pendingPortalAction && !voiceActive ? <div className="assistant-action-card" role="status"><strong>{describePortalAction(pendingPortalAction)}</strong><p>Nothing changes until you confirm.</p><div><button className="primary-action" disabled={pending} onClick={() => resolvePendingPortalAction(true)} type="button">Confirm action</button><button className="secondary-action" disabled={pending} onClick={() => resolvePendingPortalAction(false)} type="button">Cancel</button></div></div> : null}
           {pending ? <div className="assistant-empty"><Sparkles aria-hidden="true" size={18} /> Checking the masked demo record…</div> : null}
         </div>
         {panelError ? <p className="assistant-error" role="alert">{panelError}</p> : null}

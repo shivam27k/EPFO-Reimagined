@@ -4146,7 +4146,7 @@ textarea {
 
 .assistant-launcher {
   position: sticky;
-  z-index: 1;
+  z-index: 103;
   top: 20px;
   grid-column: 3;
   grid-row: 1;
@@ -4249,16 +4249,27 @@ textarea {
     margin: 0;
   }
 
-  .assistant-workspace[data-view="docked"] {
+  .assistant-workspace[data-view="docked"],
+  .assistant-workspace[data-view="fullscreen"] {
     position: fixed;
-    z-index: 120;
-    top: auto;
-    right: 0;
-    bottom: 68px;
-    left: 0;
-    width: 100%;
-    height: min(78dvh, 720px);
-    border-top: 1px solid #71849c;
+    z-index: 130;
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    border-top: 0;
     border-left: 0;
+  }
+
+  .assistant-workspace .assistant-form {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-launcher,
+  .assistant-workspace,
+  .assistant-workspace * {
+    scroll-behavior: auto !important;
+    transition: none !important;
   }
 }

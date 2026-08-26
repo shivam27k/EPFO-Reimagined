@@ -28,25 +28,44 @@ const focusableSelector = [
 
 export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
   const pathname = usePathname();
-  const [active, setActive] = useState<ActiveUtility | null>(null);
+  const [utilityState, setUtilityState] = useState<{ pathname: string; active: ActiveUtility | null }>({
+    pathname,
+    active: null,
+  });
   const [assistantView, setAssistantView] = useState<AssistantWorkspaceView>(() => (
     typeof window === "undefined" ? "collapsed" : readAssistantWorkspaceView()
   ));
   const [voiceActive, setVoiceActive] = useState(false);
-  const [utilitySnapshot, setUtilitySnapshot] = useState(snapshot);
-  const [contextStale, setContextStale] = useState(false);
+  const [refreshedContext, setRefreshedContext] = useState<{
+    source: MemberSnapshot;
+    snapshot: MemberSnapshot;
+    stale: boolean;
+  } | null>(null);
   const lastTrigger = useRef<HTMLButtonElement | null>(null);
   const refreshController = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    setUtilitySnapshot(snapshot);
-    setContextStale(false);
-  }, [snapshot]);
+  const active = utilityState.pathname === pathname ? utilityState.active : null;
+  const currentContext = refreshedContext?.source === snapshot
+    ? refreshedContext
+    : { source: snapshot, snapshot, stale: false };
+  const utilitySnapshot = currentContext.snapshot;
+  const contextStale = currentContext.stale;
 
   useEffect(() => {
     refreshController.current?.abort();
-    setActive(null);
   }, [pathname]);
+
+  useEffect(() => {
+    if (assistantView !== "fullscreen") return;
+
+    const background = document.querySelectorAll<HTMLElement>(
+      ".portal-sidebar, .portal-stage, .mobile-navigation",
+    );
+    background.forEach((element) => { element.inert = true; });
+
+    return () => {
+      background.forEach((element) => { element.inert = false; });
+    };
+  }, [assistantView]);
 
   useEffect(() => {
     if (!active) return;
@@ -59,7 +78,7 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
-        setActive(null);
+        setUtilityState({ pathname, active: null });
         return;
       }
       if (event.key !== "Tab") return;
@@ -91,7 +110,7 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
       window.removeEventListener("keydown", onKeyDown);
       background.forEach((element) => { element.inert = false; });
     };
-  }, [active]);
+  }, [active, pathname]);
 
   useEffect(() => {
     if (!active) {
@@ -115,15 +134,24 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
       const response = await fetch("/api/member/snapshot", { cache: "no-store", signal: controller.signal });
       if (controller.signal.aborted) return;
       if (!response.ok) {
-        setContextStale(true);
+        setRefreshedContext((current) => ({
+          source: snapshot,
+          snapshot: current?.source === snapshot ? current.snapshot : snapshot,
+          stale: true,
+        }));
         return;
       }
       const refreshedSnapshot = await response.json() as MemberSnapshot;
       if (controller.signal.aborted) return;
-      setUtilitySnapshot(refreshedSnapshot);
-      setContextStale(false);
+      setRefreshedContext({ source: snapshot, snapshot: refreshedSnapshot, stale: false });
     } catch {
-      if (!controller.signal.aborted) setContextStale(true);
+      if (!controller.signal.aborted) {
+        setRefreshedContext((current) => ({
+          source: snapshot,
+          snapshot: current?.source === snapshot ? current.snapshot : snapshot,
+          stale: true,
+        }));
+      }
     } finally {
       if (refreshController.current === controller) refreshController.current = null;
     }
@@ -132,11 +160,14 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
   function toggle(next: ActiveUtility, trigger?: HTMLButtonElement) {
     if (trigger) lastTrigger.current = trigger;
     if (active !== next) void refreshUtilitySnapshot();
-    setActive((current) => (current === next ? null : next));
+    setUtilityState((current) => {
+      const currentActive = current.pathname === pathname ? current.active : null;
+      return { pathname, active: currentActive === next ? null : next };
+    });
   }
 
   function closeAll() {
-    setActive(null);
+    setUtilityState({ pathname, active: null });
   }
 
   function changeAssistantView(view: AssistantWorkspaceView) {

@@ -24,6 +24,7 @@ vi.mock("@/components/assistant/assistant-panel", () => ({
       <button onClick={() => onViewChange?.("fullscreen")} type="button">Maximize assistant</button>
       <button onClick={() => onViewChange?.("collapsed")} type="button">Collapse assistant</button>
       <button onClick={() => onVoiceActiveChange?.(true)} type="button">Activate mock voice</button>
+      <input aria-label="Mock conversation draft" defaultValue="" />
     </div>
   ),
 }));
@@ -97,6 +98,18 @@ describe("PortalUtilities", () => {
     });
   });
 
+  test("keeps assistant-local state mounted across route changes", () => {
+    const { rerender } = render(<PortalUtilities snapshot={snapshot()} />);
+    const draft = screen.getByRole("textbox", { name: "Mock conversation draft" });
+    fireEvent.change(draft, { target: { value: "Keep this question" } });
+
+    pathname = "/profile";
+    rerender(<PortalUtilities snapshot={snapshot()} />);
+
+    expect(screen.getByRole("textbox", { name: "Mock conversation draft" })).toBe(draft);
+    expect(draft).toHaveValue("Keep this question");
+  });
+
   test("maximizes and collapses the assistant workspace", () => {
     render(<PortalUtilities snapshot={snapshot()} />);
     const utilities = screen.getByRole("button", { name: "Ask EPF Sahayak" }).closest(".portal-utilities");
@@ -107,6 +120,20 @@ describe("PortalUtilities", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Collapse assistant" }));
     expect(utilities).toHaveAttribute("data-assistant-view", "collapsed");
+  });
+
+  test("makes the portal background inert only while the assistant is full screen", () => {
+    render(<><aside className="portal-sidebar" /><main className="portal-stage" /><nav className="mobile-navigation" /><PortalUtilities snapshot={snapshot()} /></>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Maximize assistant" }));
+    expect(document.querySelector<HTMLElement>(".portal-sidebar")?.inert).toBe(true);
+    expect(document.querySelector<HTMLElement>(".portal-stage")?.inert).toBe(true);
+    expect(document.querySelector<HTMLElement>(".mobile-navigation")?.inert).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse assistant" }));
+    expect(document.querySelector<HTMLElement>(".portal-sidebar")?.inert).toBe(false);
+    expect(document.querySelector<HTMLElement>(".portal-stage")?.inert).toBe(false);
+    expect(document.querySelector<HTMLElement>(".mobile-navigation")?.inert).toBe(false);
   });
 
   test("retains the previous snapshot and marks context stale after a refresh failure", async () => {

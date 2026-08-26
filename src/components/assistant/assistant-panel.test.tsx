@@ -1,10 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { beforeEach, vi } from "vitest";
 
 import type { MemberSnapshot } from "@/domain/member-snapshot";
 import type { PortalAction, PortalActionResult } from "@/domain/portal-actions";
 import { AssistantPanel } from "./assistant-panel";
+import type { AssistantWorkspaceView } from "./assistant-workspace-state";
 
 type VoiceCaption = {
   role: "member" | "assistant";
@@ -15,6 +16,9 @@ type VoiceControlProps = {
   active: boolean;
   contextVersion: string;
   route: string;
+  pendingAction?: unknown;
+  onConfirmPending?(): void;
+  onCancelPending?(): void;
   onToolCall?(action: PortalAction): Promise<PortalActionResult>;
   onExit(): void;
   onReturnToText(captions: VoiceCaption[]): void;
@@ -47,6 +51,7 @@ vi.mock("./assistant-voice-control", () => ({
           Open text chat
         </button>
         <button onClick={props.onExit} type="button">End voice mode</button>
+        {props.pendingAction ? <div role="status"><button onClick={props.onConfirmPending} type="button">Confirm action</button><button onClick={props.onCancelPending} type="button">Cancel</button></div> : null}
       </section>
     );
   },
@@ -206,6 +211,22 @@ describe("AssistantPanel voice integration", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("The returned failure text.");
   });
 
+  test("renders one confirmation surface for a pending voice action", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    render(<AssistantPanel snapshot={snapshot()} />);
+
+    openVoiceMode();
+    await act(async () => {
+      await voiceHarness.props?.onToolCall?.({
+        name: "propose_demo_action",
+        arguments: { action: "simulate_bank_payment" },
+      });
+    });
+
+    expect(screen.getAllByRole("button", { name: "Confirm action" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Cancel" })).toHaveLength(1);
+  });
+
   test("changes the voice grounding version when router refresh supplies new member state", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
     const firstSnapshot = snapshot();
@@ -297,6 +318,11 @@ describe("AssistantPanel voice integration", () => {
 });
 
 describe("AssistantPanel workspace shell", () => {
+  function WorkspaceHarness() {
+    const [view, setView] = useState<AssistantWorkspaceView>("docked");
+    return <><button type="button">Page action</button><AssistantPanel onViewChange={setView} snapshot={snapshot()} view={view} /></>;
+  }
+
   test("changes between docked, full-screen, and collapsed views without remounting the conversation", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
     const onViewChange = vi.fn();
@@ -328,6 +354,26 @@ describe("AssistantPanel workspace shell", () => {
     render(<AssistantPanel contextStale onViewChange={vi.fn()} snapshot={snapshot()} view="docked" />);
 
     expect(screen.getByText("Context refresh failed; showing the last verified demo record.")).toBeInTheDocument();
+  });
+
+  test("contains focus in full screen and restores docked mode on Escape", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    const rects = vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue({ length: 1 } as DOMRectList);
+    render(<WorkspaceHarness />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open EPF Sahayak full screen" }));
+    const dialog = screen.getByRole("dialog", { name: "EPF Sahayak workspace" });
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
+
+    const controls = within(dialog).getAllByRole("button").filter((control) => !control.hasAttribute("disabled"));
+    controls.at(-1)?.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(controls[0]);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByRole("complementary", { name: "EPF Sahayak workspace" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Open EPF Sahayak full screen" })).toHaveFocus());
+    rects.mockRestore();
   });
 
   test("keeps optional workspace content inside one scroll region above the stationary composer", () => {
