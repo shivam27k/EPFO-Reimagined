@@ -18,7 +18,7 @@ export default defineConfig({
       DATABASE_URL: `file:${databasePath}`,
     },
     url: `http://localhost:${port}`,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
   },
   projects: [
     {

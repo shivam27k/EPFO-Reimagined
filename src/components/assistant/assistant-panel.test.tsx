@@ -318,9 +318,9 @@ describe("AssistantPanel voice integration", () => {
 });
 
 describe("AssistantPanel workspace shell", () => {
-  function WorkspaceHarness() {
+  function WorkspaceHarness({ modal = false }: { modal?: boolean }) {
     const [view, setView] = useState<AssistantWorkspaceView>("docked");
-    return <><button type="button">Page action</button><AssistantPanel onViewChange={setView} snapshot={snapshot()} view={view} /></>;
+    return <><button type="button">Page action</button><AssistantPanel modal={modal && view !== "collapsed"} onViewChange={setView} snapshot={snapshot()} view={view} /></>;
   }
 
   test("changes between docked, full-screen, and collapsed views without remounting the conversation", async () => {
@@ -373,6 +373,27 @@ describe("AssistantPanel workspace shell", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.getByRole("complementary", { name: "EPF Sahayak workspace" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Open EPF Sahayak full screen" })).toHaveFocus());
+    rects.mockRestore();
+  });
+
+  test("treats responsive docked mode as a modal and restores the launcher on Escape", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    const rects = vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue({ length: 1 } as DOMRectList);
+    render(<WorkspaceHarness modal />);
+
+    const dialog = screen.getByRole("dialog", { name: "EPF Sahayak workspace" });
+    expect(dialog).toHaveAttribute("data-view", "docked");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
+
+    const controls = within(dialog).getAllByRole("button").filter((control) => !control.hasAttribute("disabled"));
+    controls.at(-1)?.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(controls[0]);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Ask EPF Sahayak" })).toHaveFocus());
+    expect(screen.queryByRole("dialog", { name: "EPF Sahayak workspace" })).not.toBeInTheDocument();
     rects.mockRestore();
   });
 

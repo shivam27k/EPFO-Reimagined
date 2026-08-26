@@ -104,6 +104,7 @@ export function AssistantPanel({
   onViewChange,
   contextStale = false,
   onVoiceActiveChange,
+  modal = false,
   suppressPrompt = false,
 }: {
   snapshot: MemberSnapshot;
@@ -111,6 +112,7 @@ export function AssistantPanel({
   onViewChange?: (view: AssistantWorkspaceView) => void;
   contextStale?: boolean;
   onVoiceActiveChange?: (active: boolean) => void;
+  modal?: boolean;
   suppressPrompt?: boolean;
 }) {
   const pathname = usePathname();
@@ -141,6 +143,7 @@ export function AssistantPanel({
   const [pendingPortalAction, setPendingPortalAction] = useState<PendingPortalAction | null>(null);
   const workspaceView = view ?? internalView;
   const workspaceOpen = workspaceView !== "collapsed";
+  const workspaceModal = workspaceView === "fullscreen" || modal;
 
   useEffect(() => {
     onVoiceActiveChange?.(voiceActive);
@@ -170,7 +173,7 @@ export function AssistantPanel({
   }
 
   useEffect(() => {
-    if (workspaceView !== "fullscreen") return;
+    if (!workspaceModal) return;
 
     const workspace = workspaceRef.current;
     if (workspace === null) return;
@@ -184,7 +187,7 @@ export function AssistantPanel({
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
-        changeView("docked");
+        changeView(modal ? "collapsed" : "docked");
         return;
       }
       if (event.key !== "Tab") return;
@@ -214,12 +217,12 @@ export function AssistantPanel({
       window.cancelAnimationFrame(focusFrame);
       window.removeEventListener("keydown", onKeyDown);
       window.requestAnimationFrame(() => {
-        workspace
-          .querySelector<HTMLButtonElement>('[aria-label="Open EPF Sahayak full screen"]')
-          ?.focus();
+        if (document.querySelector('[aria-label="EPF Sahayak workspace"][aria-modal="true"]')) return;
+        const label = modal ? "Ask EPF Sahayak" : "Open EPF Sahayak full screen";
+        document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)?.focus();
       });
     };
-  }, [changeView, workspaceView]);
+  }, [changeView, modal, workspaceModal]);
 
   useEffect(() => {
     let active = true;
@@ -425,11 +428,11 @@ export function AssistantPanel({
       {workspaceView === "collapsed" && !voiceActive ? <button aria-label="Ask EPF Sahayak" className="assistant-launcher" onClick={openAssistant} type="button"><Bot aria-hidden="true" size={22} /><span><strong>EPF Sahayak</strong><small>Open page guidance</small></span></button> : null}
       {workspaceOpen ? <section
         aria-label="EPF Sahayak workspace"
-        aria-modal={workspaceView === "fullscreen" ? true : undefined}
+        aria-modal={workspaceModal ? true : undefined}
         className="assistant-workspace"
         data-view={workspaceView}
         ref={workspaceRef}
-        role={workspaceView === "fullscreen" ? "dialog" : "complementary"}
+        role={workspaceModal ? "dialog" : "complementary"}
         tabIndex={-1}
       >
         <header className="assistant-workspace-header"><div><span className="utility-label">Masked demo context</span><h2>EPF Sahayak</h2></div><div className="assistant-workspace-controls">{navigationCompletedInFullscreen && workspaceView === "fullscreen" ? <button className="secondary-action" onClick={() => changeView("docked")} type="button">Exit full screen to view page</button> : null}<button aria-label="Collapse EPF Sahayak" className="icon-action" disabled={voiceActive} onClick={closeAssistant} title={voiceActive ? "End voice mode before collapsing EPF Sahayak." : undefined} type="button"><PanelRightClose aria-hidden="true" size={19} /></button>{workspaceView === "docked" ? <button className="icon-action" onClick={() => changeView("fullscreen")} type="button" aria-label="Open EPF Sahayak full screen"><Maximize2 aria-hidden="true" size={19} /></button> : <button className="icon-action" onClick={() => changeView("docked")} type="button" aria-label="Exit EPF Sahayak full screen"><Minimize2 aria-hidden="true" size={19} /></button>}</div></header>

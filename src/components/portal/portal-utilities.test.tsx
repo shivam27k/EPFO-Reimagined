@@ -12,14 +12,16 @@ vi.mock("@/components/assistant/assistant-panel", () => ({
     contextStale,
     onViewChange,
     onVoiceActiveChange,
+    modal,
     view,
   }: {
     contextStale?: boolean;
     onViewChange?(view: "collapsed" | "docked" | "fullscreen"): void;
     onVoiceActiveChange?(active: boolean): void;
+    modal?: boolean;
     view?: string;
   }) => (
-    <div data-context-stale={contextStale} data-view={view}>
+    <div data-context-stale={contextStale} data-modal={modal} data-view={view}>
       <button onClick={() => onViewChange?.("docked")} type="button">Ask EPF Sahayak</button>
       <button onClick={() => onViewChange?.("fullscreen")} type="button">Maximize assistant</button>
       <button onClick={() => onViewChange?.("collapsed")} type="button">Collapse assistant</button>
@@ -134,6 +136,27 @@ describe("PortalUtilities", () => {
     expect(document.querySelector<HTMLElement>(".portal-sidebar")?.inert).toBe(false);
     expect(document.querySelector<HTMLElement>(".portal-stage")?.inert).toBe(false);
     expect(document.querySelector<HTMLElement>(".mobile-navigation")?.inert).toBe(false);
+  });
+
+  test("makes responsive docked mode modal and keeps the portal background unreachable", async () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: true,
+      media: "(max-width: 860px)",
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+    render(<><aside className="portal-sidebar" /><main className="portal-stage" /><nav className="mobile-navigation" /><PortalUtilities snapshot={snapshot()} /></>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
+    const assistant = screen.getByRole("button", { name: "Ask EPF Sahayak" }).parentElement;
+    await waitFor(() => expect(assistant).toHaveAttribute("data-modal", "true"));
+    expect(document.querySelector<HTMLElement>(".portal-sidebar")?.inert).toBe(true);
+    expect(document.querySelector<HTMLElement>(".portal-stage")?.inert).toBe(true);
+    expect(document.querySelector<HTMLElement>(".mobile-navigation")?.inert).toBe(true);
   });
 
   test("retains the previous snapshot and marks context stale after a refresh failure", async () => {

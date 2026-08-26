@@ -55,7 +55,8 @@ test("keeps the assistant workspace, conversation, and attachment review across 
   await expect(page.getByRole("button", { name: "Open EPF Sahayak full screen" })).toBeFocused();
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const mobileWorkspace = page.getByRole("complementary", { name: "EPF Sahayak workspace" });
+  const mobileWorkspace = page.getByRole("dialog", { name: "EPF Sahayak workspace" });
+  await expect(mobileWorkspace).toHaveAttribute("aria-modal", "true");
   const box = await mobileWorkspace.boundingBox();
   expect(box).not.toBeNull();
   expect(box?.x).toBe(0);
@@ -76,4 +77,8 @@ test("keeps the assistant workspace, conversation, and attachment review across 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(mobileWorkspace).toHaveCSS("transition-duration", "0s");
   await expect(mobileWorkspace.getByRole("button", { name: "Send" })).toHaveCSS("transition-duration", "0s");
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Ask EPF Sahayak" })).toBeFocused();
+  await expect(page.getByRole("dialog", { name: "EPF Sahayak workspace" })).toHaveCount(0);
 });

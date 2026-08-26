@@ -2,7 +2,7 @@
 
 import { FlaskConical, MapPinned, X } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { AssistantPanel } from "@/components/assistant/assistant-panel";
 import {
@@ -26,6 +26,25 @@ const focusableSelector = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
+const responsiveAssistantQuery = "(max-width: 860px)";
+
+function subscribeToResponsiveAssistant(listener: () => void) {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
+  const mediaQuery = window.matchMedia(responsiveAssistantQuery);
+  mediaQuery.addEventListener("change", listener);
+  return () => mediaQuery.removeEventListener("change", listener);
+}
+
+function readResponsiveAssistant() {
+  return typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia(responsiveAssistantQuery).matches;
+}
+
+function readServerResponsiveAssistant() {
+  return false;
+}
+
 export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
   const pathname = usePathname();
   const [utilityState, setUtilityState] = useState<{ pathname: string; active: ActiveUtility | null }>({
@@ -36,6 +55,11 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
     typeof window === "undefined" ? "collapsed" : readAssistantWorkspaceView()
   ));
   const [voiceActive, setVoiceActive] = useState(false);
+  const responsiveAssistant = useSyncExternalStore(
+    subscribeToResponsiveAssistant,
+    readResponsiveAssistant,
+    readServerResponsiveAssistant,
+  );
   const [refreshedContext, setRefreshedContext] = useState<{
     source: MemberSnapshot;
     snapshot: MemberSnapshot;
@@ -49,13 +73,15 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
     : { source: snapshot, snapshot, stale: false };
   const utilitySnapshot = currentContext.snapshot;
   const contextStale = currentContext.stale;
+  const responsiveAssistantModal = responsiveAssistant && assistantView !== "collapsed";
+  const assistantModal = assistantView === "fullscreen" || responsiveAssistantModal;
 
   useEffect(() => {
     refreshController.current?.abort();
   }, [pathname]);
 
   useEffect(() => {
-    if (assistantView !== "fullscreen") return;
+    if (!assistantModal) return;
 
     const background = document.querySelectorAll<HTMLElement>(
       ".portal-sidebar, .portal-stage, .mobile-navigation",
@@ -65,7 +91,7 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
     return () => {
       background.forEach((element) => { element.inert = false; });
     };
-  }, [assistantView]);
+  }, [assistantModal]);
 
   useEffect(() => {
     if (!active) return;
@@ -258,6 +284,7 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
 
       <AssistantPanel
         contextStale={contextStale}
+        modal={responsiveAssistantModal}
         onViewChange={changeAssistantView}
         onVoiceActiveChange={setVoiceActive}
         snapshot={utilitySnapshot}
