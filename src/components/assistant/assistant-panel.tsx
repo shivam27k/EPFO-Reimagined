@@ -1,8 +1,8 @@
 "use client";
 
-import { Bot, ChevronLeft, ChevronRight, FileSearch, Mic, Send, Sparkles, X } from "lucide-react";
+import { Bot, ChevronLeft, ChevronRight, FileSearch, Maximize2, Mic, Minimize2, PanelRightClose, Send, Sparkles } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   ASSISTANT_PATCH_APPLIED_EVENT,
@@ -58,6 +58,29 @@ const pageSuggestions: Record<string, string[]> = {
   "/claims": ["Am I ready to claim?", "Explain my claim status"],
 };
 
+const pageNames: Record<string, string> = {
+  "/onboarding": "Member onboarding",
+  "/profile": "Profile and KYC",
+  "/employment": "Employment details",
+  "/passbook": "Passbook",
+  "/claims": "Claims",
+};
+
+const focusableSelector = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "summary",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+function pageName(pathname: string): string {
+  const matchedRoute = Object.keys(pageNames).find((route) => pathname === route || pathname.startsWith(`${route}/`));
+  return matchedRoute ? pageNames[matchedRoute] : "Member portal";
+}
+
 function promptForPage(pathname: string, snapshot: MemberSnapshot): ProactivePromptModel | null {
   if (pathname === "/onboarding" && snapshot.persona === "NEW_MEMBER" && !snapshot.profile.onboardingComplete) {
     const count = processDefinitions.ONBOARDING.questions.length;
@@ -77,9 +100,6 @@ async function readJson(response: Response) {
 
 export function AssistantPanel({
   snapshot,
-  open: controlledOpen,
-  onOpen,
-  onClose,
   view,
   onViewChange,
   contextStale = false,
@@ -87,9 +107,6 @@ export function AssistantPanel({
   suppressPrompt = false,
 }: {
   snapshot: MemberSnapshot;
-  open?: boolean;
-  onOpen?: (trigger?: HTMLButtonElement) => void;
-  onClose?: () => void;
   view?: AssistantWorkspaceView;
   onViewChange?: (view: AssistantWorkspaceView) => void;
   contextStale?: boolean;
@@ -98,9 +115,10 @@ export function AssistantPanel({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const workspaceRef = useRef<HTMLElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const validationCounts = useRef<Record<string, number>>({});
-  const [internalOpen, setInternalOpen] = useState(false);
+  const [internalView, setInternalView] = useState<AssistantWorkspaceView>("collapsed");
   const [voiceActive, setVoiceActive] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [dismissed, setDismissed] = useState<string[]>([]);
@@ -118,23 +136,24 @@ export function AssistantPanel({
   const [patchPending, setPatchPending] = useState(false);
   const [extractionMessage, setExtractionMessage] = useState("");
   const [pendingPortalAction, setPendingPortalAction] = useState<PendingPortalAction | null>(null);
-  const open = controlledOpen ?? (view ? view !== "collapsed" : internalOpen);
-  const textOpen = open && !voiceActive;
+  const workspaceView = view ?? internalView;
+  const textOpen = workspaceView !== "collapsed" && !voiceActive;
 
   useEffect(() => {
     onVoiceActiveChange?.(voiceActive);
   }, [onVoiceActiveChange, voiceActive]);
 
-  function openAssistant(trigger?: HTMLButtonElement) {
-    if (onOpen) onOpen(trigger);
-    else if (onViewChange) onViewChange("docked");
-    else setInternalOpen(true);
+  const changeView = useCallback((nextView: AssistantWorkspaceView) => {
+    if (onViewChange) onViewChange(nextView);
+    else setInternalView(nextView);
+  }, [onViewChange]);
+
+  function openAssistant() {
+    changeView("docked");
   }
 
   function closeAssistant() {
-    if (onClose) onClose();
-    else if (onViewChange) onViewChange("collapsed");
-    else setInternalOpen(false);
+    changeView("collapsed");
   }
 
   function startVoice() {
@@ -147,6 +166,45 @@ export function AssistantPanel({
     setVoiceActive(false);
     openAssistant();
   }
+
+  useEffect(() => {
+    if (workspaceView !== "fullscreen") return;
+
+    const workspace = workspaceRef.current;
+    if (workspace === null) return;
+    const focusContainer: HTMLElement = workspace;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        changeView("docked");
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = Array.from(focusContainer.querySelectorAll<HTMLElement>(focusableSelector))
+        .filter((element) => element.getClientRects().length > 0);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        focusContainer.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const focused = document.activeElement;
+      if (event.shiftKey && (focused === first || !focusContainer.contains(focused))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (focused === last || !focusContainer.contains(focused))) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [changeView, workspaceView]);
 
   useEffect(() => {
     let active = true;
@@ -212,8 +270,7 @@ export function AssistantPanel({
   function chooseGuidance(prompt: ProactivePromptModel, mode: "ONE_BY_ONE" | "REVIEW_ALL") {
     if (!prompt.processKey) return;
     setGuidance({ processKey: prompt.processKey, mode, position: 0 });
-    if (onOpen) onOpen();
-    else setInternalOpen(true);
+    openAssistant();
   }
 
   async function sendMessage(message: string, signal?: AbortSignal): Promise<{ text: string } | null> {
@@ -311,9 +368,18 @@ export function AssistantPanel({
 
   return (
     <section className="assistant-area" aria-label="EPF Sahayak assistant" data-context-stale={contextStale}>
-      {!voiceActive ? <button aria-controls="assistant-utility-panel" aria-expanded={textOpen} aria-label={textOpen ? "Close EPF Sahayak" : "Ask EPF Sahayak"} className="assistant-launcher" onClick={(event) => textOpen ? closeAssistant() : openAssistant(event.currentTarget)} type="button"><Bot aria-hidden="true" size={27} /><span><strong>Ask EPF Sahayak</strong><small>Optional help for this page</small></span></button> : null}
-      <aside aria-hidden={!textOpen} aria-label="EPF Sahayak conversation" aria-modal={textOpen ? true : undefined} className="assistant-panel" data-open={textOpen} data-utility-panel="assistant" id="assistant-utility-panel" inert={!textOpen ? true : undefined} role="dialog" tabIndex={-1}>
-        <header className="assistant-panel-header"><div><span className="utility-label">Masked demo context</span><h2>EPF Sahayak</h2></div><button className="icon-action" data-utility-close onClick={closeAssistant} type="button" aria-label="Close assistant"><X aria-hidden="true" size={19} /></button></header>
+      {workspaceView === "collapsed" && !voiceActive ? <button aria-label="Ask EPF Sahayak" className="assistant-launcher" onClick={openAssistant} type="button"><Bot aria-hidden="true" size={22} /><span><strong>EPF Sahayak</strong><small>Open page guidance</small></span></button> : null}
+      {textOpen ? <section
+        aria-label="EPF Sahayak workspace"
+        aria-modal={workspaceView === "fullscreen" ? true : undefined}
+        className="assistant-workspace"
+        data-view={workspaceView}
+        ref={workspaceRef}
+        role={workspaceView === "fullscreen" ? "dialog" : "complementary"}
+        tabIndex={-1}
+      >
+        <header className="assistant-workspace-header"><div><span className="utility-label">Masked demo context</span><h2>EPF Sahayak</h2></div><div className="assistant-workspace-controls"><button className="icon-action" onClick={closeAssistant} type="button" aria-label="Collapse EPF Sahayak"><PanelRightClose aria-hidden="true" size={19} /></button>{workspaceView === "docked" ? <button className="icon-action" onClick={() => changeView("fullscreen")} type="button" aria-label="Open EPF Sahayak full screen"><Maximize2 aria-hidden="true" size={19} /></button> : <button className="icon-action" onClick={() => changeView("docked")} type="button" aria-label="Exit EPF Sahayak full screen"><Minimize2 aria-hidden="true" size={19} /></button>}</div></header>
+        <div className="assistant-context-strip"><span className="utility-label">Current page</span><strong>{pageName(pathname)}</strong><span className={contextStale ? "assistant-context-status is-stale" : "assistant-context-status"}>{contextStale ? "Context refresh failed; showing the last verified demo record." : "Masked context verified for this demo."}</span></div>
         <p className="assistant-boundary">Text guidance only. Never enter real Aadhaar, UAN, PAN, bank, OTP, biometric, or government data.</p>
         {guidance && definition ? <section className="question-guidance">
           <div className="question-guidance-heading"><div><span className="utility-label">{definition.title}</span><h3>{definition.questions.length} questions in total</h3></div><button className="text-action" onClick={() => setGuidance(null)} type="button">End guide</button></div>
@@ -321,7 +387,7 @@ export function AssistantPanel({
           <div className="guidance-controls"><button className="secondary-action" disabled={guidance.position === 0} onClick={() => setGuidance({ ...guidance, position: guidance.position - 1 })} type="button"><ChevronLeft aria-hidden="true" size={17} /> Previous question</button><button className="primary-action" disabled={guidance.position >= maxPosition} onClick={() => setGuidance({ ...guidance, position: guidance.position + 1 })} type="button">Next question <ChevronRight aria-hidden="true" size={17} /></button></div>
         </section> : null}
         <div className="assistant-suggestions" aria-label="Suggested questions">{suggestions.map((suggestion) => <button disabled={pending} key={suggestion} onClick={() => sendMessage(suggestion)} type="button">{suggestion}</button>)}</div>
-        <div className="assistant-thread" aria-live="polite" aria-busy={pending || historyLoading}>
+        <div className="assistant-thread" aria-busy={pending || historyLoading} aria-label="EPF Sahayak conversation" aria-live="polite" role="region">
           {visiblePrompt && !suppressPrompt ? <ProactivePrompt prompt={visiblePrompt} onDismiss={() => dismissPrompt(visiblePrompt)} onChooseGuidance={(mode) => chooseGuidance(visiblePrompt, mode)} /> : null}
           {historyLoading ? <div className="assistant-empty"><Sparkles aria-hidden="true" size={18} /> Loading this run’s conversation…</div> : null}
           {!historyLoading && messages.length === 0 ? <div className="assistant-empty">Ask about this page, a status, or the safest next action.</div> : null}
@@ -337,7 +403,7 @@ export function AssistantPanel({
           <button className="secondary-action" disabled={extractionPending || !syntheticAccepted} type="submit">{extractionPending ? "Reviewing…" : "Create review proposals"}</button>
         </form>{extractionMessage ? <p className="extraction-feedback" role="status">{extractionMessage}</p> : null}{proposals.length > 0 ? <><div className="patch-scope" aria-label="Apply scope"><button aria-pressed={patchScope === "FIELD"} onClick={() => setPatchScope("FIELD")} type="button">One field</button><button aria-pressed={patchScope === "SECTION"} onClick={() => setPatchScope("SECTION")} type="button">This section</button><button aria-pressed={patchScope === "WHOLE_FORM"} onClick={() => setPatchScope("WHOLE_FORM")} type="button">All extracted</button></div><FormPatchReview proposals={scopedProposals} scope={patchScope} pending={patchPending} onConfirm={applyPatch} onCancel={() => { setProposals([]); setExtractionMessage("Proposals cancelled. No data changed."); void persistState({ kind: "DISMISS_FORM_PATCH" }).catch(() => setPanelError("The proposal was hidden, but that choice may not survive a refresh.")); }} /></> : null}</details> : null}
         <form className="assistant-form" onSubmit={(event) => { event.preventDefault(); sendMessage(input); }}><label htmlFor="assistant-message">Ask EPF Sahayak</label><input id="assistant-message" onChange={(event) => setInput(event.target.value)} placeholder="Why is this blocked?" value={input} /><button aria-label="Talk to EPF Sahayak" className="assistant-voice-button" disabled={pending} onClick={startVoice} title="Voice" type="button"><Mic aria-hidden="true" size={18} /></button><button className="primary-action" disabled={pending || !input.trim()} type="submit"><Send aria-hidden="true" size={16} /> Send</button></form>
-      </aside>
+      </section> : null}
       {voiceActive ? <AssistantVoiceControl active contextVersion={voiceContextVersion} onExit={() => setVoiceActive(false)} onReturnToText={returnToText} onToolCall={handlePortalAction} pendingAction={pendingPortalAction} onConfirmPending={() => resolvePendingPortalAction(true)} onCancelPending={() => resolvePendingPortalAction(false)} route={pathname} /> : null}
     </section>
   );

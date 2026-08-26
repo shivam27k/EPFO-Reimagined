@@ -10,23 +10,19 @@ vi.mock("next/navigation", () => ({ usePathname: () => pathname }));
 vi.mock("@/components/assistant/assistant-panel", () => ({
   AssistantPanel: ({
     contextStale,
-    onClose,
-    onOpen,
     onViewChange,
     onVoiceActiveChange,
     view,
   }: {
     contextStale?: boolean;
-    onClose?(): void;
-    onOpen?(): void;
     onViewChange?(view: "collapsed" | "docked" | "fullscreen"): void;
     onVoiceActiveChange?(active: boolean): void;
     view?: string;
   }) => (
     <div data-context-stale={contextStale} data-view={view}>
-      <button onClick={() => onOpen?.()} type="button">Ask EPF Sahayak</button>
+      <button onClick={() => onViewChange?.("docked")} type="button">Ask EPF Sahayak</button>
       <button onClick={() => onViewChange?.("fullscreen")} type="button">Maximize assistant</button>
-      <button onClick={() => onClose?.()} type="button">Collapse assistant</button>
+      <button onClick={() => onViewChange?.("collapsed")} type="button">Collapse assistant</button>
       <button onClick={() => onVoiceActiveChange?.(true)} type="button">Activate mock voice</button>
     </div>
   ),

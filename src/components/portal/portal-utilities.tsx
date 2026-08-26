@@ -139,16 +139,9 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
   }
 
   function changeAssistantView(view: AssistantWorkspaceView) {
+    if (view === "docked" && assistantView === "collapsed") void refreshUtilitySnapshot();
     setAssistantView(view);
     persistAssistantWorkspaceView(view);
-  }
-
-  function openAssistant(trigger?: HTMLButtonElement) {
-    if (trigger) lastTrigger.current = trigger;
-    if (assistantView === "collapsed") {
-      void refreshUtilitySnapshot();
-      changeAssistantView("docked");
-    }
   }
 
   return (
@@ -233,11 +226,8 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
 
       <AssistantPanel
         contextStale={contextStale}
-        onClose={() => changeAssistantView("collapsed")}
         onViewChange={changeAssistantView}
         onVoiceActiveChange={setVoiceActive}
-        onOpen={openAssistant}
-        open={assistantView !== "collapsed"}
         snapshot={utilitySnapshot}
         suppressPrompt={active !== null}
         view={assistantView}

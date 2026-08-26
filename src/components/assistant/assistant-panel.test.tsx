@@ -97,8 +97,6 @@ describe("AssistantPanel voice integration", () => {
   test("passes route changes to the same mounted voice HUD", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
     const { rerender } = render(<AssistantPanel snapshot={snapshot()} />);
-    await screen.findByText("Ask about this page, a status, or the safest next action.");
-
     openVoiceMode();
     const voiceHud = screen.getByRole("region", { name: "EPF Sahayak voice mode" });
     expect(voiceHud).toHaveAttribute("data-route", "/claims");
@@ -116,7 +114,6 @@ describe("AssistantPanel voice integration", () => {
     vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
     const firstSnapshot = snapshot();
     const { rerender } = render(<AssistantPanel snapshot={firstSnapshot} />);
-    await screen.findByText("Ask about this page, a status, or the safest next action.");
     openVoiceMode();
     const voiceHud = screen.getByRole("region", { name: "EPF Sahayak voice mode" });
     const firstVersion = voiceHarness.props?.contextVersion;
@@ -136,15 +133,12 @@ describe("AssistantPanel voice integration", () => {
     const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<ReturnType<typeof historyResponse>>>(async () => historyResponse());
     vi.stubGlobal("fetch", fetchMock);
     render(<AssistantPanel snapshot={snapshot()} />);
-    await screen.findByText("Ask about this page, a status, or the safest next action.");
-
     openVoiceMode();
     fireEvent.click(screen.getByRole("button", { name: "Open text chat" }));
 
     expect(screen.queryByRole("region", { name: "EPF Sahayak voice mode" })).not.toBeInTheDocument();
-    const dialog = screen.getByRole("dialog", { name: "EPF Sahayak conversation" });
-    expect(dialog).toHaveAttribute("aria-hidden", "false");
-    const messages = dialog.querySelectorAll(".assistant-message");
+    const conversation = screen.getByRole("region", { name: "EPF Sahayak conversation" });
+    const messages = conversation.querySelectorAll(".assistant-message");
     expect(messages).toHaveLength(2);
     expect(messages[0]).toHaveAttribute("data-role", "member");
     expect(messages[0]?.querySelector(".assistant-message-content")).toHaveTextContent("मेरा passbook");
@@ -163,8 +157,8 @@ describe("AssistantPanel voice integration", () => {
 
     openVoiceMode();
     fireEvent.click(screen.getByRole("button", { name: "Open text chat" }));
-    const dialog = screen.getByRole("dialog", { name: "EPF Sahayak conversation" });
-    expect(dialog.querySelectorAll(".assistant-message")).toHaveLength(2);
+    const conversation = screen.getByRole("region", { name: "EPF Sahayak conversation" });
+    expect(conversation.querySelectorAll(".assistant-message")).toHaveLength(2);
 
     await act(async () => {
       resolveHistory?.({
@@ -178,10 +172,10 @@ describe("AssistantPanel voice integration", () => {
       await historyBody;
     });
 
-    const messages = dialog.querySelectorAll(".assistant-message-content");
+    const messages = conversation.querySelectorAll(".assistant-message-content");
     expect(messages).toHaveLength(3);
-    expect(within(dialog).getAllByText("Saved guidance")).toHaveLength(1);
-    expect(within(dialog).getAllByText((_, element) => element?.classList.contains("assistant-message-content") === true && element.textContent === "मेरा passbook")).toHaveLength(1);
+    expect(within(conversation).getAllByText("Saved guidance")).toHaveLength(1);
+    expect(within(conversation).getAllByText((_, element) => element?.classList.contains("assistant-message-content") === true && element.textContent === "मेरा passbook")).toHaveLength(1);
     expect(messages[2]).toHaveTextContent("आपका passbook तैयार है");
   });
 
@@ -194,14 +188,49 @@ describe("AssistantPanel voice integration", () => {
     render(<AssistantPanel snapshot={snapshot()} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
-    const dialog = await screen.findByRole("dialog", { name: "EPF Sahayak conversation" });
-    await within(dialog).findByText("मेरा", { exact: true });
-    const messageContent = dialog.querySelectorAll(".assistant-message-content");
+    const conversation = await screen.findByRole("region", { name: "EPF Sahayak conversation" });
+    await within(conversation).findByText("मेरा", { exact: true });
+    const messageContent = conversation.querySelectorAll(".assistant-message-content");
     expect(messageContent[0]?.querySelector(".assistant-text-hindi")).toHaveTextContent("मेरा");
     expect(messageContent[0]?.querySelector(".assistant-text-english")).toHaveTextContent("passbook");
     expect(messageContent[1]?.querySelector(".assistant-text-hindi")).toHaveTextContent("आपका");
     expect(within(messageContent[1] as HTMLElement).getByText("passbook").tagName).toBe("SPAN");
     expect(messageContent[2]).toHaveTextContent("Speech received in an unsupported script. Please speak in English or Hindi.");
-    expect(dialog).not.toHaveTextContent("سلام");
+    expect(conversation).not.toHaveTextContent("سلام");
+  });
+});
+
+describe("AssistantPanel workspace shell", () => {
+  test("changes between docked, full-screen, and collapsed views without remounting the conversation", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    const onViewChange = vi.fn();
+    const { rerender } = render(
+      <AssistantPanel onViewChange={onViewChange} snapshot={snapshot()} view="docked" />,
+    );
+    const workspace = screen.getByRole("complementary", { name: "EPF Sahayak workspace" });
+    const conversation = screen.getByRole("region", { name: "EPF Sahayak conversation" });
+
+    expect(workspace).toHaveAttribute("data-view", "docked");
+    expect(workspace).not.toHaveAttribute("aria-modal");
+    expect(workspace).toHaveTextContent("Current page");
+    expect(workspace).toHaveTextContent("Claims");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open EPF Sahayak full screen" }));
+    expect(onViewChange).toHaveBeenCalledWith("fullscreen");
+
+    rerender(<AssistantPanel onViewChange={onViewChange} snapshot={snapshot()} view="fullscreen" />);
+
+    expect(screen.getByRole("dialog", { name: "EPF Sahayak workspace" })).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByRole("region", { name: "EPF Sahayak conversation" })).toBe(conversation);
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse EPF Sahayak" }));
+    expect(onViewChange).toHaveBeenCalledWith("collapsed");
+  });
+
+  test("shows the last verified context notice when refresh fails", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    render(<AssistantPanel contextStale onViewChange={vi.fn()} snapshot={snapshot()} view="docked" />);
+
+    expect(screen.getByText("Context refresh failed; showing the last verified demo record.")).toBeInTheDocument();
   });
 });
