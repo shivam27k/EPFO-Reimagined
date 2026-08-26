@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
 
 import type { MemberSnapshot } from "@/domain/member-snapshot";
@@ -125,6 +125,31 @@ describe("PortalUtilities", () => {
     });
   });
 
+  test("does not replace a post-navigation snapshot with a delayed old-route refresh", async () => {
+    let resolveRefresh!: (response: { ok: boolean; json(): Promise<MemberSnapshot> }) => void;
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise((resolve) => {
+      resolveRefresh = resolve;
+    })));
+    const oldSnapshot = snapshot({ nextAction: { label: "Old route action", href: "/overview" } });
+    const currentSnapshot = snapshot({ nextAction: { label: "Current route action", href: "/passbook" } });
+    const { rerender } = render(<PortalUtilities snapshot={oldSnapshot} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Your EPF journey" }));
+    pathname = "/passbook";
+    rerender(<PortalUtilities snapshot={currentSnapshot} />);
+
+    await waitFor(() => {
+      expect(document.querySelector("#journey-utility-panel a")).toHaveTextContent("Current route action");
+    });
+
+    await act(async () => {
+      resolveRefresh({ ok: true, json: async () => oldSnapshot });
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector("#journey-utility-panel a")).toHaveTextContent("Current route action");
+  });
+
   test("marks the utility rail while voice mode is active", () => {
     render(<PortalUtilities snapshot={snapshot()} />);
 
@@ -153,7 +178,10 @@ describe("PortalUtilities", () => {
       "href",
       "/passbook",
     );
-    expect(fetch).toHaveBeenCalledWith("/api/member/snapshot", { cache: "no-store" });
+    expect(fetch).toHaveBeenCalledWith("/api/member/snapshot", expect.objectContaining({
+      cache: "no-store",
+      signal: expect.any(AbortSignal),
+    }));
   });
 
   test("closes the journey drawer when its next action is selected", async () => {

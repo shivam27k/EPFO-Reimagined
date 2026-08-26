@@ -36,12 +36,14 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
   const [utilitySnapshot, setUtilitySnapshot] = useState(snapshot);
   const [contextStale, setContextStale] = useState(false);
   const lastTrigger = useRef<HTMLButtonElement | null>(null);
+  const refreshController = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setUtilitySnapshot(snapshot);
   }, [snapshot]);
 
   useEffect(() => {
+    refreshController.current?.abort();
     setActive(null);
   }, [pathname]);
 
@@ -104,16 +106,25 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
   }, [active]);
 
   async function refreshUtilitySnapshot() {
+    const controller = new AbortController();
+    refreshController.current?.abort();
+    refreshController.current = controller;
+
     try {
-      const response = await fetch("/api/member/snapshot", { cache: "no-store" });
+      const response = await fetch("/api/member/snapshot", { cache: "no-store", signal: controller.signal });
+      if (controller.signal.aborted) return;
       if (!response.ok) {
         setContextStale(true);
         return;
       }
-      setUtilitySnapshot(await response.json() as MemberSnapshot);
+      const refreshedSnapshot = await response.json() as MemberSnapshot;
+      if (controller.signal.aborted) return;
+      setUtilitySnapshot(refreshedSnapshot);
       setContextStale(false);
     } catch {
-      setContextStale(true);
+      if (!controller.signal.aborted) setContextStale(true);
+    } finally {
+      if (refreshController.current === controller) refreshController.current = null;
     }
   }
 
