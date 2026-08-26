@@ -117,6 +117,7 @@ export function AssistantPanel({
   const router = useRouter();
   const workspaceRef = useRef<HTMLElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const extractionGeneration = useRef(0);
   const validationCounts = useRef<Record<string, number>>({});
   const [internalView, setInternalView] = useState<AssistantWorkspaceView>("collapsed");
   const [voiceActive, setVoiceActive] = useState(false);
@@ -343,14 +344,26 @@ export function AssistantPanel({
     const file = fileRef.current?.files?.[0];
     if (!file) { setExtractionMessage("Choose a synthetic PDF, JPEG, or PNG first."); return; }
     if (!syntheticAccepted) { setExtractionMessage("Confirm that this file contains synthetic demo data only."); return; }
-    setExtractionPending(true); setExtractionMessage("");
+    const generation = ++extractionGeneration.current;
+    setExtractionPending(true); setExtractionMessage(""); setProposals([]);
     const data = new FormData(); data.set("document", file); data.set("documentKind", documentKind); data.set("syntheticDisclosureAccepted", "true");
     try {
       const response = await fetch("/api/assistant/extract", { method: "POST", body: data });
       const result = await readJson(response);
+      if (generation !== extractionGeneration.current) {
+        if (response.ok && Array.isArray(result.proposals)) {
+          try { await persistState({ kind: "DISMISS_FORM_PATCH" }); }
+          catch { setPanelError("The cancelled proposal may still appear after a refresh."); }
+        }
+        return;
+      }
       if (!response.ok) throw new Error(String(result.error ?? "The synthetic document could not be reviewed."));
       setProposals(Array.isArray(result.proposals) ? result.proposals as FormFieldProposal[] : []); setPatchScope("SECTION"); setExtractionMessage(String(result.disclosure ?? "Proposals are ready for review."));
-    } catch (error) { setExtractionMessage(error instanceof Error ? error.message : "The synthetic document could not be reviewed."); } finally { setExtractionPending(false); }
+    } catch (error) {
+      if (generation === extractionGeneration.current) setExtractionMessage(error instanceof Error ? error.message : "The synthetic document could not be reviewed.");
+    } finally {
+      if (generation === extractionGeneration.current) setExtractionPending(false);
+    }
   }
 
   const scopedProposals = patchScope === "FIELD" ? proposals.slice(0, 1) : proposals;
@@ -360,19 +373,22 @@ export function AssistantPanel({
     setProposals([]);
     setPatchScope("SECTION");
     setExtractionMessage(message);
+    setExtractionPending(false);
     setDocumentOpen(false);
     if (fileRef.current) fileRef.current.value = "";
   }
 
   function cancelDocumentReview() {
+    const shouldDismissProposal = proposals.length > 0 || extractionPending;
+    extractionGeneration.current += 1;
     clearDocumentReview();
-    if (proposals.length > 0) {
+    if (shouldDismissProposal) {
       void persistState({ kind: "DISMISS_FORM_PATCH" }).catch(() => setPanelError("The proposal was hidden, but that choice may not survive a refresh."));
     }
   }
 
   async function applyPatch() {
-    if (pathname !== "/onboarding" || snapshot.persona !== "NEW_MEMBER") return;
+    if (pathname !== "/onboarding" || snapshot.persona !== "NEW_MEMBER" || extractionPending) return;
     setPatchPending(true); setExtractionMessage("");
     try {
       const response = await fetch("/api/assistant/form-patch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ processKey: "ONBOARDING", scope: patchScope, section: patchScope === "SECTION" ? scopedProposals[0]?.section : undefined, proposals: scopedProposals, confirmed: true, demoDisclosureAccepted: true }) });
@@ -428,7 +444,7 @@ export function AssistantPanel({
           <label>Choose PDF, JPEG, or PNG (max 5 MB)<input ref={fileRef} accept="application/pdf,image/jpeg,image/png" type="file" /></label>
           <label className="synthetic-confirm"><input checked={syntheticAccepted} onChange={(event) => setSyntheticAccepted(event.target.checked)} type="checkbox" /><span>This file is entirely synthetic and contains no real identity, bank, or government data.</span></label>
           <button className="secondary-action" disabled={extractionPending || !syntheticAccepted} type="submit">{extractionPending ? "Reviewing…" : "Create review proposals"}</button>
-        </form>{extractionMessage ? <p className="extraction-feedback" role="status">{extractionMessage}</p> : null}{proposals.length > 0 ? pathname === "/onboarding" && snapshot.persona === "NEW_MEMBER" ? <><div className="patch-scope" aria-label="Apply scope"><button aria-pressed={patchScope === "FIELD"} onClick={() => setPatchScope("FIELD")} type="button">One field</button><button aria-pressed={patchScope === "SECTION"} onClick={() => setPatchScope("SECTION")} type="button">This section</button><button aria-pressed={patchScope === "WHOLE_FORM"} onClick={() => setPatchScope("WHOLE_FORM")} type="button">All extracted</button></div><FormPatchReview proposals={scopedProposals} scope={patchScope} pending={patchPending} onConfirm={applyPatch} onCancel={cancelDocumentReview} /></> : <section aria-label="Review extracted document" className="document-review-only"><div className="patch-list">{proposals.map((proposal) => <article className="patch-row" key={proposal.field}><div className="patch-heading"><strong>{proposal.label}</strong><span data-validation={proposal.validation}>{proposal.validation === "VALID" ? "Reviewed" : "Check value"}</span></div><dl><div><dt>Existing</dt><dd>{proposal.existingValue || "Not saved"}</dd></div><div><dt>Proposed</dt><dd>{proposal.sensitive ? "•••• " : ""}{proposal.proposedValue}</dd></div><div><dt>Source</dt><dd>{proposal.source}</dd></div><div><dt>Confidence</dt><dd>{Math.round(proposal.confidence * 100)}%</dd></div></dl></article>)}</div><p className="document-review-guidance">I can review this synthetic document here. Open new-member setup before applying extracted values to a form.</p></section> : null}</section> : null}
+        </form>{extractionMessage ? <p className="extraction-feedback" role="status">{extractionMessage}</p> : null}{proposals.length > 0 ? pathname === "/onboarding" && snapshot.persona === "NEW_MEMBER" ? <><div className="patch-scope" aria-label="Apply scope"><button aria-pressed={patchScope === "FIELD"} disabled={extractionPending} onClick={() => setPatchScope("FIELD")} type="button">One field</button><button aria-pressed={patchScope === "SECTION"} disabled={extractionPending} onClick={() => setPatchScope("SECTION")} type="button">This section</button><button aria-pressed={patchScope === "WHOLE_FORM"} disabled={extractionPending} onClick={() => setPatchScope("WHOLE_FORM")} type="button">All extracted</button></div><FormPatchReview proposals={scopedProposals} scope={patchScope} pending={patchPending || extractionPending} onConfirm={applyPatch} onCancel={cancelDocumentReview} /></> : <section aria-label="Review extracted document" className="document-review-only"><div className="patch-list">{proposals.map((proposal) => <article className="patch-row" key={proposal.field}><div className="patch-heading"><strong>{proposal.label}</strong><span data-validation={proposal.validation}>{proposal.validation === "VALID" ? "Reviewed" : "Check value"}</span></div><dl><div><dt>Existing</dt><dd>{proposal.existingValue || "Not saved"}</dd></div><div><dt>Proposed</dt><dd>{proposal.sensitive ? "•••• " : ""}{proposal.proposedValue}</dd></div><div><dt>Source</dt><dd>{proposal.source}</dd></div><div><dt>Confidence</dt><dd>{Math.round(proposal.confidence * 100)}%</dd></div></dl></article>)}</div><p className="document-review-guidance">I can review this synthetic document here. Open new-member setup before applying extracted values to a form.</p></section> : null}</section> : null}
         </div>
         <form className="assistant-form" onSubmit={(event) => { event.preventDefault(); sendMessage(input); }}><label htmlFor="assistant-message">Ask EPF Sahayak</label><input id="assistant-message" onChange={(event) => setInput(event.target.value)} placeholder="Why is this blocked?" value={input} /><button aria-controls="assistant-document-review" aria-expanded={documentOpen} aria-label="Attach synthetic document" className="assistant-attachment-button" onClick={() => setDocumentOpen((current) => !current)} title="Attach synthetic document" type="button"><Paperclip aria-hidden="true" size={18} /></button><button aria-label="Talk to EPF Sahayak" className="assistant-voice-button" disabled={pending} onClick={startVoice} title="Voice" type="button"><Mic aria-hidden="true" size={18} /></button><button className="primary-action" disabled={pending || !input.trim()} type="submit"><Send aria-hidden="true" size={16} /> Send</button></form>
       </section> : null}

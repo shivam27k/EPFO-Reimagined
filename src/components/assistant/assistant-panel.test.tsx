@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, vi } from "vitest";
 
@@ -419,5 +419,77 @@ describe("AssistantPanel synthetic document workspace", () => {
     expect(await screen.findByRole("region", { name: "Review proposed form changes" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Confirm proposed changes" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "One field" })).toBeInTheDocument();
+  });
+
+  test("keeps a cancelled in-flight extraction from restoring or persisting late proposals", async () => {
+    let resolveExtraction: ((response: ReturnType<typeof assistantResponse>) => void) | undefined;
+    const extraction = new Promise<ReturnType<typeof assistantResponse>>((resolve) => {
+      resolveExtraction = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/assistant/extract") return extraction;
+      if (init?.method === "PUT") return assistantResponse({ ok: true });
+      return historyResponse();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AssistantPanel snapshot={snapshot()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
+    fireEvent.click(screen.getByRole("button", { name: "Attach synthetic document" }));
+    fireEvent.change(screen.getByLabelText("Choose PDF, JPEG, or PNG (max 5 MB)"), {
+      target: { files: [new File(["demo"], "bank-statement.pdf", { type: "application/pdf" })] },
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: /This file is entirely synthetic/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create review proposals" }));
+    expect(screen.getByRole("button", { name: "Reviewing…" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel review" }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT")).toHaveLength(1));
+
+    await act(async () => {
+      resolveExtraction?.(assistantResponse({ proposals: [bankProposal], disclosure: "Late proposal" }));
+      await extraction;
+    });
+
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT")).toHaveLength(2));
+    fireEvent.click(screen.getByRole("button", { name: "Attach synthetic document" }));
+    expect(screen.queryByText("Rohan K Mehta")).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Document type" })).toHaveValue("BANK_STATEMENT");
+    expect(screen.getByRole("checkbox", { name: /This file is entirely synthetic/ })).not.toBeChecked();
+  });
+
+  test("disables prior proposal application while a replacement extraction is pending", async () => {
+    navigation.pathname = "/onboarding";
+    let resolveExtraction: ((response: ReturnType<typeof assistantResponse>) => void) | undefined;
+    const extraction = new Promise<ReturnType<typeof assistantResponse>>((resolve) => {
+      resolveExtraction = resolve;
+    });
+    const replacementProposal = { ...bankProposal, field: "panName", label: "Name on PAN card", proposedValue: "Rohan Mehta", source: "pan-card.png · local synthetic demo extraction" };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/assistant/extract") return extraction;
+      return assistantResponse({ messages: [], dismissedPromptKeys: [], formPatchProposal: [bankProposal] });
+    }));
+    render(<AssistantPanel snapshot={snapshot()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
+    fireEvent.click(screen.getByRole("button", { name: "Attach synthetic document" }));
+    expect(await screen.findByRole("button", { name: "Confirm proposed changes" })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Choose PDF, JPEG, or PNG (max 5 MB)"), {
+      target: { files: [new File(["demo"], "pan-card.png", { type: "image/png" })] },
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: /This file is entirely synthetic/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create review proposals" }));
+
+    expect(screen.queryByRole("button", { name: "Confirm proposed changes" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "One field" })).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveExtraction?.(assistantResponse({ proposals: [replacementProposal], disclosure: "Replacement ready" }));
+      await extraction;
+    });
+
+    expect(screen.getByText("Name on PAN card")).toBeInTheDocument();
+    expect(screen.queryByText("Rohan K Mehta")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirm proposed changes" })).toBeEnabled();
   });
 });
