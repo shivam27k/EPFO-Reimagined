@@ -187,6 +187,7 @@ export function AssistantPanel({
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
+        if (voiceActive) return;
         changeView(modal ? "collapsed" : "docked");
         return;
       }
@@ -222,7 +223,7 @@ export function AssistantPanel({
         document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)?.focus();
       });
     };
-  }, [changeView, modal, workspaceModal]);
+  }, [changeView, modal, voiceActive, workspaceModal]);
 
   useEffect(() => {
     let active = true;

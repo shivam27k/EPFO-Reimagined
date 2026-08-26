@@ -397,6 +397,21 @@ describe("AssistantPanel workspace shell", () => {
     rects.mockRestore();
   });
 
+  test("keeps responsive voice mode open when Escape is pressed", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    render(<WorkspaceHarness modal />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Talk to EPF Sahayak" }));
+    expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collapse EPF Sahayak" })).toBeDisabled();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(screen.getByRole("dialog", { name: "EPF Sahayak workspace" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End voice mode" })).toBeInTheDocument();
+  });
+
   test("keeps optional workspace content inside one scroll region above the stationary composer", () => {
     vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
     render(<AssistantPanel onViewChange={vi.fn()} snapshot={snapshot()} view="docked" />);
