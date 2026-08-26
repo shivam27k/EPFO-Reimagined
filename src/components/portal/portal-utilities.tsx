@@ -5,11 +5,16 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { AssistantPanel } from "@/components/assistant/assistant-panel";
+import {
+  persistAssistantWorkspaceView,
+  readAssistantWorkspaceView,
+  type AssistantWorkspaceView,
+} from "@/components/assistant/assistant-workspace-state";
 import { ScenarioDrawer } from "@/components/demo/scenario-drawer";
 import type { MemberSnapshot } from "@/domain/member-snapshot";
 import { JourneyCard } from "./journey-card";
 
-type ActiveUtility = "journey" | "scenarios" | "assistant";
+type ActiveUtility = "journey" | "scenarios";
 
 const focusableSelector = [
   "a[href]",
@@ -24,8 +29,12 @@ const focusableSelector = [
 export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
   const pathname = usePathname();
   const [active, setActive] = useState<ActiveUtility | null>(null);
+  const [assistantView, setAssistantView] = useState<AssistantWorkspaceView>(() => (
+    typeof window === "undefined" ? "collapsed" : readAssistantWorkspaceView()
+  ));
   const [voiceActive, setVoiceActive] = useState(false);
   const [utilitySnapshot, setUtilitySnapshot] = useState(snapshot);
+  const [contextStale, setContextStale] = useState(false);
   const lastTrigger = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
@@ -97,10 +106,14 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
   async function refreshUtilitySnapshot() {
     try {
       const response = await fetch("/api/member/snapshot", { cache: "no-store" });
-      if (!response.ok) return;
+      if (!response.ok) {
+        setContextStale(true);
+        return;
+      }
       setUtilitySnapshot(await response.json() as MemberSnapshot);
+      setContextStale(false);
     } catch {
-      // Keep the last usable snapshot; the page remains fully functional without the utility refresh.
+      setContextStale(true);
     }
   }
 
@@ -114,8 +127,26 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
     setActive(null);
   }
 
+  function changeAssistantView(view: AssistantWorkspaceView) {
+    setAssistantView(view);
+    persistAssistantWorkspaceView(view);
+  }
+
+  function openAssistant(trigger?: HTMLButtonElement) {
+    if (trigger) lastTrigger.current = trigger;
+    if (assistantView === "collapsed") {
+      void refreshUtilitySnapshot();
+      changeAssistantView("docked");
+    }
+  }
+
   return (
-    <div className="portal-utilities" data-active={active ?? "none"} data-voice-active={voiceActive}>
+    <div
+      className="portal-utilities"
+      data-active={active ?? "none"}
+      data-assistant-view={assistantView}
+      data-voice-active={voiceActive}
+    >
       {active ? (
         <button
           aria-label="Close open utility panel"
@@ -190,15 +221,15 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
       />
 
       <AssistantPanel
-        onClose={closeAll}
+        contextStale={contextStale}
+        onClose={() => changeAssistantView("collapsed")}
+        onViewChange={changeAssistantView}
         onVoiceActiveChange={setVoiceActive}
-        onOpen={(trigger) => {
-          if (trigger) toggle("assistant", trigger);
-          else setActive("assistant");
-        }}
-        open={active === "assistant"}
+        onOpen={openAssistant}
+        open={assistantView !== "collapsed"}
         snapshot={utilitySnapshot}
-        suppressPrompt={active !== null && active !== "assistant"}
+        suppressPrompt={active !== null}
+        view={assistantView}
       />
 
     </div>

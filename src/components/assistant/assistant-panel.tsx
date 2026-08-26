@@ -19,6 +19,7 @@ import { AssistantMessage } from "./assistant-message";
 import { AssistantVoiceControl, type AssistantVoiceCaption } from "./assistant-voice-control";
 import { FormPatchReview } from "./form-patch-review";
 import { ProactivePrompt, type ProactivePromptModel } from "./proactive-prompt";
+import type { AssistantWorkspaceView } from "./assistant-workspace-state";
 import { captureVisibleScreenText } from "./visible-screen-context";
 import { consumeQueuedPortalTarget, executePortalAction, type PendingPortalAction } from "./portal-action-coordinator";
 
@@ -79,6 +80,9 @@ export function AssistantPanel({
   open: controlledOpen,
   onOpen,
   onClose,
+  view,
+  onViewChange,
+  contextStale = false,
   onVoiceActiveChange,
   suppressPrompt = false,
 }: {
@@ -86,6 +90,9 @@ export function AssistantPanel({
   open?: boolean;
   onOpen?: (trigger?: HTMLButtonElement) => void;
   onClose?: () => void;
+  view?: AssistantWorkspaceView;
+  onViewChange?: (view: AssistantWorkspaceView) => void;
+  contextStale?: boolean;
   onVoiceActiveChange?: (active: boolean) => void;
   suppressPrompt?: boolean;
 }) {
@@ -111,7 +118,7 @@ export function AssistantPanel({
   const [patchPending, setPatchPending] = useState(false);
   const [extractionMessage, setExtractionMessage] = useState("");
   const [pendingPortalAction, setPendingPortalAction] = useState<PendingPortalAction | null>(null);
-  const open = controlledOpen ?? internalOpen;
+  const open = controlledOpen ?? (view ? view !== "collapsed" : internalOpen);
   const textOpen = open && !voiceActive;
 
   useEffect(() => {
@@ -120,11 +127,13 @@ export function AssistantPanel({
 
   function openAssistant(trigger?: HTMLButtonElement) {
     if (onOpen) onOpen(trigger);
+    else if (onViewChange) onViewChange("docked");
     else setInternalOpen(true);
   }
 
   function closeAssistant() {
     if (onClose) onClose();
+    else if (onViewChange) onViewChange("collapsed");
     else setInternalOpen(false);
   }
 
@@ -301,7 +310,7 @@ export function AssistantPanel({
   const maxPosition = guidance && definition ? (guidance.mode === "ONE_BY_ONE" ? definition.questions.length - 1 : batches.length - 1) : 0;
 
   return (
-    <section className="assistant-area" aria-label="EPF Sahayak assistant">
+    <section className="assistant-area" aria-label="EPF Sahayak assistant" data-context-stale={contextStale}>
       {!voiceActive ? <button aria-controls="assistant-utility-panel" aria-expanded={textOpen} aria-label={textOpen ? "Close EPF Sahayak" : "Ask EPF Sahayak"} className="assistant-launcher" onClick={(event) => textOpen ? closeAssistant() : openAssistant(event.currentTarget)} type="button"><Bot aria-hidden="true" size={27} /><span><strong>Ask EPF Sahayak</strong><small>Optional help for this page</small></span></button> : null}
       <aside aria-hidden={!textOpen} aria-label="EPF Sahayak conversation" aria-modal={textOpen ? true : undefined} className="assistant-panel" data-open={textOpen} data-utility-panel="assistant" id="assistant-utility-panel" inert={!textOpen ? true : undefined} role="dialog" tabIndex={-1}>
         <header className="assistant-panel-header"><div><span className="utility-label">Masked demo context</span><h2>EPF Sahayak</h2></div><button className="icon-action" data-utility-close onClick={closeAssistant} type="button" aria-label="Close assistant"><X aria-hidden="true" size={19} /></button></header>

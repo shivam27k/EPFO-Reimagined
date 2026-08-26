@@ -1,16 +1,39 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, vi } from "vitest";
 
 import type { MemberSnapshot } from "@/domain/member-snapshot";
 import { PortalUtilities } from "./portal-utilities";
 
-vi.mock("next/navigation", () => ({ usePathname: () => "/overview" }));
+let pathname = "/overview";
+
+vi.mock("next/navigation", () => ({ usePathname: () => pathname }));
 vi.mock("@/components/assistant/assistant-panel", () => ({
-  AssistantPanel: ({ onVoiceActiveChange }: { onVoiceActiveChange?(active: boolean): void }) => (
-    <button onClick={() => onVoiceActiveChange?.(true)} type="button">Activate mock voice</button>
+  AssistantPanel: ({
+    contextStale,
+    onClose,
+    onOpen,
+    onViewChange,
+    onVoiceActiveChange,
+    view,
+  }: {
+    contextStale?: boolean;
+    onClose?(): void;
+    onOpen?(): void;
+    onViewChange?(view: "collapsed" | "docked" | "fullscreen"): void;
+    onVoiceActiveChange?(active: boolean): void;
+    view?: string;
+  }) => (
+    <div data-context-stale={contextStale} data-view={view}>
+      <button onClick={() => onOpen?.()} type="button">Ask EPF Sahayak</button>
+      <button onClick={() => onViewChange?.("fullscreen")} type="button">Maximize assistant</button>
+      <button onClick={() => onClose?.()} type="button">Collapse assistant</button>
+      <button onClick={() => onVoiceActiveChange?.(true)} type="button">Activate mock voice</button>
+    </div>
   ),
 }));
-vi.mock("@/components/demo/scenario-drawer", () => ({ ScenarioDrawer: () => null }));
+vi.mock("@/components/demo/scenario-drawer", () => ({
+  ScenarioDrawer: ({ open }: { open: boolean }) => <div data-scenario-open={open} />,
+}));
 
 function snapshot(overrides: Partial<MemberSnapshot> = {}): MemberSnapshot {
   return {
@@ -40,6 +63,68 @@ function snapshot(overrides: Partial<MemberSnapshot> = {}): MemberSnapshot {
 }
 
 describe("PortalUtilities", () => {
+  beforeEach(() => {
+    pathname = "/overview";
+    window.sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test("keeps the assistant docked across route changes while closing modal drawers", async () => {
+    const { rerender } = render(<PortalUtilities snapshot={snapshot()} />);
+    const utilities = screen.getByRole("button", { name: "Ask EPF Sahayak" }).closest(".portal-utilities");
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
+    expect(utilities).toHaveAttribute("data-assistant-view", "docked");
+
+    fireEvent.click(screen.getByRole("button", { name: "Your EPF journey" }));
+    expect(screen.getByRole("dialog", { name: "Your EPF journey" })).toHaveAttribute("aria-hidden", "false");
+
+    pathname = "/passbook";
+    rerender(<PortalUtilities snapshot={snapshot()} />);
+
+    await waitFor(() => {
+      expect(document.querySelector("#journey-utility-panel")).toHaveAttribute("aria-hidden", "true");
+    });
+    expect(utilities).toHaveAttribute("data-assistant-view", "docked");
+
+    fireEvent.click(screen.getByRole("button", { name: "Demo scenarios" }));
+    expect(document.querySelector("[data-scenario-open]")).toHaveAttribute("data-scenario-open", "true");
+
+    pathname = "/claims";
+    rerender(<PortalUtilities snapshot={snapshot()} />);
+
+    await waitFor(() => {
+      expect(document.querySelector("[data-scenario-open]")).toHaveAttribute("data-scenario-open", "false");
+    });
+  });
+
+  test("maximizes and collapses the assistant workspace", () => {
+    render(<PortalUtilities snapshot={snapshot()} />);
+    const utilities = screen.getByRole("button", { name: "Ask EPF Sahayak" }).closest(".portal-utilities");
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
+    fireEvent.click(screen.getByRole("button", { name: "Maximize assistant" }));
+    expect(utilities).toHaveAttribute("data-assistant-view", "fullscreen");
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse assistant" }));
+    expect(utilities).toHaveAttribute("data-assistant-view", "collapsed");
+  });
+
+  test("retains the previous snapshot and marks context stale after a refresh failure", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+
+    render(<PortalUtilities snapshot={snapshot()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Your EPF journey" }));
+
+    expect(screen.getByRole("link", { name: "Complete new-member setup" })).toHaveAttribute("href", "/onboarding");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Ask EPF Sahayak" }).parentElement).toHaveAttribute("data-context-stale", "true");
+    });
+  });
+
   test("marks the utility rail while voice mode is active", () => {
     render(<PortalUtilities snapshot={snapshot()} />);
 
@@ -81,7 +166,9 @@ describe("PortalUtilities", () => {
     fireEvent.click(screen.getByRole("button", { name: "Your EPF journey" }));
 
     const drawer = screen.getByRole("dialog", { name: "Your EPF journey" });
-    fireEvent.click(await screen.findByRole("link", { name: "Complete new-member setup" }));
+    const nextAction = await screen.findByRole("link", { name: "Complete new-member setup" });
+    nextAction.addEventListener("click", (event) => event.preventDefault());
+    fireEvent.click(nextAction);
 
     expect(drawer).toHaveAttribute("aria-hidden", "true");
   });
