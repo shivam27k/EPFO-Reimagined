@@ -3451,16 +3451,18 @@ textarea {
 .question-batch li span { display: block; color: #64748b; }
 .text-action { min-height: 44px; border: 0; background: transparent; color: var(--action-blue); font: inherit; font-size: .76rem; font-weight: 700; cursor: pointer; }
 
-.document-assist { max-height: 44vh; overflow-y: auto; border-top: 1px solid var(--line); background: #fff; }
-.document-assist summary { display: flex; min-height: 52px; align-items: center; gap: 10px; padding: 8px 16px; cursor: pointer; }
-.document-assist summary > span { display: grid; }
-.document-assist summary small { color: #64748b; font-size: .7rem; }
+.document-assist { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: #fff; }
+.document-assist-header { display: grid; min-height: 52px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 16px; background: #f7f9fc; }
+.document-assist-header > span { display: grid; }
+.document-assist-header small { color: #64748b; font-size: .7rem; }
 .document-assist form { display: grid; gap: 11px; padding: 4px 16px 14px; }
 .document-assist form > label { display: grid; gap: 5px; color: #334155; font-size: .76rem; font-weight: 650; }
 .document-assist select, .document-assist input[type="file"] { min-height: 44px; width: 100%; padding: 8px; border: 1px solid #8798ac; background: #fff; font: inherit; }
 .document-assist .synthetic-confirm { grid-template-columns: auto minmax(0, 1fr); min-height: 44px; align-items: start; font-weight: 500; }
 .synthetic-confirm input { width: 20px; height: 20px; margin: 2px 0 0; }
 .patch-scope { display: flex; gap: 6px; padding: 10px 16px 0; overflow-x: auto; }
+.document-review-only { margin: 10px 16px 16px; border: 1px solid #8fa6c1; }
+.document-review-guidance { margin: 0; padding: 12px; border-top: 1px solid var(--line); background: #f4f8fc; color: #334155; font-size: .76rem; line-height: 1.5; }
 .form-patch-review { margin: 10px 16px 16px; border: 1px solid #8fa6c1; }
 .form-patch-review > header { display: flex; align-items: center; justify-content: space-between; padding: 12px; background: #f4f8fc; }
 .form-patch-review h3 { margin: 2px 0 0; font-family: var(--font-heading), sans-serif; font-size: .96rem; }
@@ -3761,9 +3763,10 @@ textarea {
 }
 
 .assistant-form {
-  grid-template-columns: minmax(0, 1fr) 44px auto;
+  grid-template-columns: minmax(0, 1fr) 44px 44px auto;
 }
 
+.assistant-form .assistant-attachment-button,
 .assistant-form .assistant-voice-button {
   display: inline-grid;
   width: 44px;
@@ -3778,6 +3781,9 @@ textarea {
   cursor: pointer;
 }
 
+.assistant-form .assistant-attachment-button:hover,
+.assistant-form .assistant-attachment-button:focus-visible,
+.assistant-form .assistant-attachment-button[aria-expanded="true"],
 .assistant-form .assistant-voice-button:hover,
 .assistant-form .assistant-voice-button:focus-visible {
   border-color: var(--assurance-teal);

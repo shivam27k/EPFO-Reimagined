@@ -343,3 +343,81 @@ describe("AssistantPanel workspace shell", () => {
     expect(scrollRegion.nextElementSibling).toBe(composer);
   });
 });
+
+describe("AssistantPanel synthetic document workspace", () => {
+  const bankProposal = {
+    field: "bankName",
+    label: "Name on bank statement",
+    existingValue: "Rohan Mehta",
+    proposedValue: "Rohan K Mehta",
+    source: "bank-statement.pdf · local synthetic demo extraction",
+    confidence: 0.94,
+    validation: "VALID",
+    section: "kyc",
+  };
+
+  beforeEach(() => {
+    navigation.pathname = "/claims";
+    routerHarness.push.mockReset();
+    routerHarness.refresh.mockReset();
+  });
+
+  test("keeps the synthetic document review open with its inputs when the route changes", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
+    const { rerender } = render(<AssistantPanel snapshot={snapshot()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
+    expect(screen.getByRole("button", { name: "Attach synthetic document" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Talk to EPF Sahayak" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Attach synthetic document" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Document type" }), { target: { value: "PAN_CARD" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /This file is entirely synthetic/ }));
+
+    navigation.pathname = "/profile";
+    rerender(<AssistantPanel snapshot={snapshot()} />);
+
+    expect(screen.getByRole("region", { name: "Synthetic document review" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Document type" })).toHaveValue("PAN_CARD");
+    expect(screen.getByRole("checkbox", { name: /This file is entirely synthetic/ })).toBeChecked();
+  });
+
+  test("shows reviewed proposals without an apply action outside onboarding", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => assistantResponse({
+      messages: [],
+      dismissedPromptKeys: [],
+      formPatchProposal: [bankProposal],
+    })));
+    const { rerender } = render(<AssistantPanel snapshot={snapshot()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
+    fireEvent.click(screen.getByRole("button", { name: "Attach synthetic document" }));
+
+    expect(await screen.findByText("Rohan K Mehta")).toBeInTheDocument();
+    navigation.pathname = "/profile";
+    rerender(<AssistantPanel snapshot={snapshot()} />);
+
+    expect(screen.getByText("Rohan K Mehta")).toBeInTheDocument();
+    expect(screen.getByText("I can review this synthetic document here. Open new-member setup before applying extracted values to a form.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Confirm proposed changes" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "One field" })).not.toBeInTheDocument();
+  });
+
+  test("retains review-and-apply controls on onboarding", async () => {
+    navigation.pathname = "/onboarding";
+    vi.stubGlobal("fetch", vi.fn(async () => assistantResponse({
+      messages: [],
+      dismissedPromptKeys: [],
+      formPatchProposal: [bankProposal],
+    })));
+    render(<AssistantPanel snapshot={snapshot()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
+    fireEvent.click(screen.getByRole("button", { name: "Attach synthetic document" }));
+
+    expect(await screen.findByRole("region", { name: "Review proposed form changes" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirm proposed changes" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "One field" })).toBeInTheDocument();
+  });
+});
