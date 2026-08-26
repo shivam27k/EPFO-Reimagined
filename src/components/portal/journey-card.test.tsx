@@ -1,6 +1,9 @@
 import { render, screen, within } from "@testing-library/react";
 
-import type { MemberSnapshot } from "@/domain/member-snapshot";
+import {
+  buildJourneyMilestones,
+  type MemberSnapshot,
+} from "@/domain/member-snapshot";
 import { JourneyCard } from "./journey-card";
 
 function newMemberSnapshot(): MemberSnapshot {
@@ -146,11 +149,12 @@ describe("JourneyCard", () => {
   test("guides a new member through KYC without assistant interaction", () => {
     render(<JourneyCard snapshot={newMemberSnapshot()} />);
 
-    const rail = screen.getByRole("list", { name: /epf journey/i });
-    expect(within(rail).getByText("Completed")).toBeInTheDocument();
-    expect(within(rail).getByText("Current")).toBeInTheDocument();
-    expect(within(rail).getAllByText("Upcoming").length).toBeGreaterThan(0);
-    expect(screen.getByText(/onboarding progress/i).closest("p")).toHaveTextContent(
+    const currentStep = screen.getByRole("heading", {
+      name: "Verify identity and bank",
+    }).closest("section");
+    expect(currentStep).toHaveAttribute("data-status", "current");
+    expect(within(currentStep as HTMLElement).getByText("You", { selector: "strong" })).toBeInTheDocument();
+    expect(screen.getByText("Journey progress").closest("p")).toHaveTextContent(
       "1 of 5 complete",
     );
     expect(screen.getByRole("link", { name: "Complete bank verification" })).toHaveAttribute(
@@ -162,12 +166,13 @@ describe("JourneyCard", () => {
   test("names the previous employer as owner when an exit date blocks a claim", () => {
     render(<JourneyCard snapshot={existingMemberSnapshot()} />);
 
-    const blockedMilestone = screen.getByRole("heading", {
+    const currentStep = screen.getByRole("heading", {
       name: "Record employment exit",
-    }).closest("li");
-    expect(blockedMilestone).not.toBeNull();
+    }).closest("section");
+    expect(currentStep).not.toBeNull();
+    expect(currentStep).toHaveAttribute("data-status", "blocked");
     expect(
-      within(blockedMilestone as HTMLLIElement).getByText("Previous employer", {
+      within(currentStep as HTMLElement).getByText("Previous employer", {
         selector: "strong",
       }),
     ).toBeInTheDocument();
@@ -178,24 +183,12 @@ describe("JourneyCard", () => {
   });
 
   test("derives KYC and contribution attention from actual records and findings", () => {
-    render(<JourneyCard snapshot={existingMemberSnapshot()} />);
+    const milestones = buildJourneyMilestones(existingMemberSnapshot());
 
-    const kycMilestone = screen.getByRole("heading", {
-      name: "Verify identity and bank",
-    }).closest("li");
-    const contributionMilestone = screen.getByRole("heading", {
-      name: "Build contribution history",
-    }).closest("li");
-
-    expect(kycMilestone).toHaveAttribute("data-status", "blocked");
-    expect(within(kycMilestone as HTMLLIElement).getByText("Blocked")).toBeInTheDocument();
-    expect(contributionMilestone).toHaveAttribute("data-status", "current");
-    expect(
-      within(contributionMilestone as HTMLLIElement).getByText("Current"),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Resolve missing exit date" })).toHaveAttribute(
-      "href",
-      "/employment",
-    );
+    expect(milestones).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "kyc", status: "blocked" }),
+      expect.objectContaining({ key: "contributions", status: "current" }),
+      expect.objectContaining({ key: "exit", status: "blocked", owner: "Previous employer" }),
+    ]));
   });
 });

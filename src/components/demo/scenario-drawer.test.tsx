@@ -5,7 +5,7 @@ import { ScenarioDrawer } from "./scenario-drawer";
 
 describe("ScenarioDrawer", () => {
   test("groups scenarios by journey area with links, status, and reset", () => {
-    render(<ScenarioDrawer />);
+    render(<ScenarioDrawer open />);
 
     expect(screen.getByRole("heading", { name: "Onboarding" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Contributions" })).toBeVisible();

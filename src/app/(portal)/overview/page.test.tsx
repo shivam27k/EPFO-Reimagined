@@ -56,9 +56,13 @@ describe("OverviewPage", () => {
       within(section as HTMLElement).getByText("Not assessed until profile verification"),
     ).toBeInTheDocument();
     expect(within(section as HTMLElement).queryByText("No blockers detected")).not.toBeInTheDocument();
+    const recommendedAction = screen.getByText("Recommended next action").closest("section");
+    expect(recommendedAction).not.toBeNull();
     expect(
-      screen.getAllByRole("link", { name: "Complete bank verification" })[0],
-    ).toHaveClass("portal-action-link");
+      within(recommendedAction as HTMLElement).getByRole("link", {
+        name: "Complete bank verification",
+      }),
+    ).toHaveClass("primary-action");
   });
 
   test("labels missing-exit employment as previous and routes ledger actions to passbook", async () => {

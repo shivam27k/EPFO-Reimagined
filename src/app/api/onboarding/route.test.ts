@@ -104,7 +104,12 @@ describe("/api/onboarding", () => {
       mobileMasked: "+91 ******2104",
       onboardingComplete: true,
     });
-    expect(snapshot.findings).toEqual([]);
+    expect(snapshot.findings).toEqual([
+      expect.objectContaining({
+        code: "MISSING_EXIT_DATE",
+        owner: "EMPLOYER",
+      }),
+    ]);
     expect(JSON.stringify(snapshot)).not.toContain(validDemoInput.uan);
     expect(JSON.stringify(snapshot)).not.toContain(validDemoInput.panNumber);
     expect(JSON.stringify(snapshot)).not.toContain(validDemoInput.bankAccountNumber);
@@ -252,6 +257,11 @@ describe("/api/onboarding", () => {
       .select()
       .from(employments)
       .where(eq(employments.demoRunId, existingRunId));
+    const beforeContributions = await getDb()
+      .select()
+      .from(contributions)
+      .innerJoin(employments, eq(contributions.employmentId, employments.id))
+      .where(eq(employments.demoRunId, existingRunId));
 
     const response = await POST(onboardingRequest(validDemoInput));
 
@@ -267,7 +277,7 @@ describe("/api/onboarding", () => {
     ).toEqual(beforeEmployments);
     expect(
       await getDb().select().from(contributions).innerJoin(employments, eq(contributions.employmentId, employments.id)).where(eq(employments.demoRunId, existingRunId)),
-    ).toHaveLength(2);
+    ).toEqual(beforeContributions);
     expect(
       await getDb().select().from(onboardingDrafts).where(eq(onboardingDrafts.demoRunId, existingRunId)),
     ).toHaveLength(0);
