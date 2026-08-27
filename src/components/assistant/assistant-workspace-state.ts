@@ -1,4 +1,4 @@
-export type AssistantWorkspaceView = "collapsed" | "docked" | "fullscreen";
+export type AssistantWorkspaceView = "collapsed" | "docked";
 
 const KEY = "epf-sahayak:workspace-view";
 const CHANGE_EVENT = "epf-sahayak:workspace-view-change";

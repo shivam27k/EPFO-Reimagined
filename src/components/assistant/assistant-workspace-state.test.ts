@@ -12,9 +12,9 @@ describe("assistant workspace state", () => {
     expect(readAssistantWorkspaceView({ getItem: () => "docked" })).toBe("docked");
   });
 
-  test("persists fullscreen as docked", () => {
+  test("persists the docked sidebar state", () => {
     let saved = "";
-    persistAssistantWorkspaceView("fullscreen", {
+    persistAssistantWorkspaceView("docked", {
       setItem: (_key, value) => {
         saved = value;
       },

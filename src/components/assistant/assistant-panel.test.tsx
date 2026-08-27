@@ -104,7 +104,7 @@ describe("AssistantPanel voice integration", () => {
     voiceHarness.props = null;
   });
 
-  test("keeps voice, the workspace, and the stationary composer together", () => {
+  test("gives voice mode the whole panel and hides the stationary text composer", () => {
     vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
     render(<AssistantPanel onViewChange={vi.fn()} snapshot={snapshot()} view="docked" />);
 
@@ -112,11 +112,10 @@ describe("AssistantPanel voice integration", () => {
 
     const workspace = screen.getByRole("complementary", { name: "EPF Sahayak workspace" });
     const voice = screen.getByRole("region", { name: "EPF Sahayak voice mode" });
-    const composer = screen.getByRole("textbox", { name: "Ask EPF Sahayak" });
 
     expect(workspace).toContainElement(voice);
-    expect(workspace).toContainElement(composer);
     expect(voice.parentElement).toHaveClass("assistant-workspace-scroll");
+    expect(screen.queryByRole("textbox", { name: "Ask EPF Sahayak" })).not.toBeInTheDocument();
     expect(document.body.querySelectorAll('[aria-label="EPF Sahayak voice mode"]')).toHaveLength(1);
   });
 
@@ -161,27 +160,6 @@ describe("AssistantPanel voice integration", () => {
 
     expect(screen.queryByText("Opening profile")).not.toBeInTheDocument();
     expect(routerHarness.push).not.toHaveBeenCalled();
-  });
-
-  test("offers an exit to the navigated page after voice navigation in full screen", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
-    const onViewChange = vi.fn();
-    render(<AssistantPanel onViewChange={onViewChange} snapshot={snapshot()} view="fullscreen" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Talk to EPF Sahayak" }));
-    expect(screen.getByRole("button", { name: "Exit EPF Sahayak full screen" })).toBeEnabled();
-    let result: PortalActionResult | undefined;
-    await act(async () => {
-      result = await voiceHarness.props?.onToolCall?.({
-        name: "navigate_to",
-        arguments: { destination: "profile" },
-      });
-    });
-
-    expect(result).toMatchObject({ status: "completed", route: "/profile" });
-    expect(routerHarness.push).toHaveBeenCalledWith("/profile");
-    fireEvent.click(await screen.findByRole("button", { name: "Exit full screen to view page" }));
-    expect(onViewChange).toHaveBeenCalledWith("docked");
   });
 
   test("keeps docked voice available after a completed navigation", async () => {
@@ -385,12 +363,17 @@ describe("AssistantPanel workspace shell", () => {
     return <><button type="button">Page action</button><AssistantPanel modal={modal && view !== "collapsed"} onViewChange={setView} snapshot={snapshot()} view={view} /></>;
   }
 
-  test("changes between docked, full-screen, and collapsed views without remounting the conversation", async () => {
+  test("uses an icon-only launcher and offers only docked or collapsed views", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
     const onViewChange = vi.fn();
-    const { rerender } = render(
-      <AssistantPanel onViewChange={onViewChange} snapshot={snapshot()} view="docked" />,
-    );
+    const { rerender } = render(<AssistantPanel onViewChange={onViewChange} snapshot={snapshot()} view="collapsed" />);
+
+    const launcher = screen.getByRole("button", { name: "Ask EPF Sahayak" });
+    expect(launcher).toHaveTextContent("");
+    fireEvent.click(launcher);
+    expect(onViewChange).toHaveBeenCalledWith("docked");
+
+    rerender(<AssistantPanel onViewChange={onViewChange} snapshot={snapshot()} view="docked" />);
     const workspace = screen.getByRole("complementary", { name: "EPF Sahayak workspace" });
     const conversation = screen.getByRole("region", { name: "EPF Sahayak conversation" });
 
@@ -399,12 +382,7 @@ describe("AssistantPanel workspace shell", () => {
     expect(workspace).toHaveTextContent("Current page");
     expect(workspace).toHaveTextContent("Claims");
 
-    fireEvent.click(screen.getByRole("button", { name: "Open EPF Sahayak full screen" }));
-    expect(onViewChange).toHaveBeenCalledWith("fullscreen");
-
-    rerender(<AssistantPanel onViewChange={onViewChange} snapshot={snapshot()} view="fullscreen" />);
-
-    expect(screen.getByRole("dialog", { name: "EPF Sahayak workspace" })).toHaveAttribute("aria-modal", "true");
+    expect(screen.queryByRole("button", { name: /full screen/i })).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "EPF Sahayak conversation" })).toBe(conversation);
 
     fireEvent.click(screen.getByRole("button", { name: "Collapse EPF Sahayak" }));
@@ -416,26 +394,6 @@ describe("AssistantPanel workspace shell", () => {
     render(<AssistantPanel contextStale onViewChange={vi.fn()} snapshot={snapshot()} view="docked" />);
 
     expect(screen.getByText("Context refresh failed; showing the last verified demo record.")).toBeInTheDocument();
-  });
-
-  test("contains focus in full screen and restores docked mode on Escape", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
-    const rects = vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue({ length: 1 } as DOMRectList);
-    render(<WorkspaceHarness />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Open EPF Sahayak full screen" }));
-    const dialog = screen.getByRole("dialog", { name: "EPF Sahayak workspace" });
-    await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
-
-    const controls = within(dialog).getAllByRole("button").filter((control) => !control.hasAttribute("disabled"));
-    controls.at(-1)?.focus();
-    fireEvent.keyDown(window, { key: "Tab" });
-    expect(document.activeElement).toBe(controls[0]);
-
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.getByRole("complementary", { name: "EPF Sahayak workspace" })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Open EPF Sahayak full screen" })).toHaveFocus());
-    rects.mockRestore();
   });
 
   test("treats responsive docked mode as a modal and restores the launcher on Escape", async () => {
@@ -472,18 +430,6 @@ describe("AssistantPanel workspace shell", () => {
     expect(screen.getByRole("dialog", { name: "EPF Sahayak workspace" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "End voice mode" })).toBeInTheDocument();
-  });
-
-  test("downgrades desktop full screen to docked on Escape while voice remains active", () => {
-    vi.stubGlobal("fetch", vi.fn(async () => historyResponse()));
-    const onViewChange = vi.fn();
-    render(<AssistantPanel onViewChange={onViewChange} snapshot={snapshot()} view="fullscreen" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Talk to EPF Sahayak" }));
-    fireEvent.keyDown(window, { key: "Escape" });
-
-    expect(onViewChange).toHaveBeenCalledWith("docked");
-    expect(screen.getByRole("region", { name: "EPF Sahayak voice mode" })).toBeInTheDocument();
   });
 
   test("keeps optional workspace content inside one scroll region above the stationary composer", () => {

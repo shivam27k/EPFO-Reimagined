@@ -26,8 +26,7 @@ test("keeps the assistant workspace, conversation, and attachment review across 
   expect(desktopWorkspaceBox).not.toBeNull();
   expect(desktopContentBox).not.toBeNull();
   expect((desktopContentBox?.x ?? 0) + (desktopContentBox?.width ?? 0)).toBeLessThanOrEqual((desktopWorkspaceBox?.x ?? 0) + 1);
-  await expect(workspace.getByRole("button", { name: "Open EPF Sahayak full screen" })).toHaveCSS("width", "44px");
-  await expect(workspace.getByRole("button", { name: "Open EPF Sahayak full screen" })).toHaveCSS("height", "44px");
+  await expect(workspace.getByRole("button", { name: /full screen/i })).toHaveCount(0);
   await expect(workspace.getByRole("button", { name: "Attach synthetic document" })).toHaveCSS("min-height", "44px");
   await expect(workspace.getByRole("button", { name: "Talk to EPF Sahayak" })).toHaveCSS("min-height", "44px");
 
@@ -47,21 +46,14 @@ test("keeps the assistant workspace, conversation, and attachment review across 
   await expect(workspace.getByRole("combobox", { name: "Document type" })).toHaveValue("PAN_CARD");
   await expect(workspace.getByRole("checkbox", { name: /This file is entirely synthetic/ })).toBeChecked();
 
-  await workspace.getByRole("button", { name: "Open EPF Sahayak full screen" }).click();
-  const dialog = page.getByRole("dialog", { name: "EPF Sahayak workspace" });
-  await expect(dialog).toHaveAttribute("aria-modal", "true");
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("complementary", { name: "EPF Sahayak workspace" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open EPF Sahayak full screen" })).toBeFocused();
-
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileWorkspace = page.getByRole("dialog", { name: "EPF Sahayak workspace" });
   await expect(mobileWorkspace).toHaveAttribute("aria-modal", "true");
   const box = await mobileWorkspace.boundingBox();
   expect(box).not.toBeNull();
-  expect(box?.x).toBe(0);
+  expect(box?.x).toBeGreaterThan(0);
   expect(box?.y).toBe(0);
-  expect(box?.width).toBe(390);
+  expect(box?.width).toBeLessThan(390);
   expect(box?.height).toBe(844);
   await expect(mobileWorkspace.getByRole("textbox", { name: "Ask EPF Sahayak" })).toBeInViewport();
   await expect(mobileWorkspace.getByRole("button", { name: "Talk to EPF Sahayak" })).toBeInViewport();

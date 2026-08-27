@@ -83,7 +83,7 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
   const utilitySnapshot = currentContext.snapshot;
   const contextStale = currentContext.stale;
   const responsiveAssistantModal = responsiveAssistant && assistantView !== "collapsed";
-  const assistantModal = assistantView === "fullscreen" || responsiveAssistantModal;
+  const assistantModal = responsiveAssistantModal;
 
   useEffect(() => {
     const background = Array.from(document.querySelectorAll<HTMLElement>(
@@ -248,31 +248,6 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
         />
       ) : null}
 
-      <nav className="utility-edge-rail" aria-label="Page utilities">
-        <button
-          aria-controls="journey-utility-panel"
-          aria-expanded={active === "journey"}
-          className="utility-edge-tab"
-          data-selected={active === "journey"}
-          onClick={(event) => toggle("journey", event.currentTarget)}
-          type="button"
-        >
-          <MapPinned aria-hidden="true" size={18} />
-          <span>Your EPF journey</span>
-        </button>
-        <button
-          aria-controls="scenario-utility-panel"
-          aria-expanded={active === "scenarios"}
-          className="utility-edge-tab utility-edge-tab-demo"
-          data-selected={active === "scenarios"}
-          onClick={(event) => toggle("scenarios", event.currentTarget)}
-          type="button"
-        >
-          <FlaskConical aria-hidden="true" size={18} />
-          <span>Demo scenarios</span>
-        </button>
-      </nav>
-
       <aside
         aria-hidden={active !== "journey"}
         aria-label="Your EPF journey"
@@ -311,15 +286,42 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
         snapshot={utilitySnapshot}
       />
 
-      <AssistantPanel
-        contextStale={contextStale}
-        modal={responsiveAssistantModal}
-        onViewChange={changeAssistantView}
-        onVoiceActiveChange={setVoiceActive}
-        snapshot={utilitySnapshot}
-        suppressPrompt={active !== null}
-        view={assistantView}
-      />
+      <div className="assistant-dock">
+        <AssistantPanel
+          contextStale={contextStale}
+          modal={responsiveAssistantModal}
+          onViewChange={changeAssistantView}
+          onVoiceActiveChange={setVoiceActive}
+          snapshot={utilitySnapshot}
+          suppressPrompt={active !== null}
+          view={assistantView}
+        />
+
+        <nav className="utility-edge-rail" aria-label="Page utilities">
+          <button
+            aria-controls="journey-utility-panel"
+            aria-expanded={active === "journey"}
+            className="utility-edge-tab"
+            data-selected={active === "journey"}
+            onClick={(event) => toggle("journey", event.currentTarget)}
+            type="button"
+          >
+            <MapPinned aria-hidden="true" size={18} />
+            <span>Your EPF journey</span>
+          </button>
+          <button
+            aria-controls="scenario-utility-panel"
+            aria-expanded={active === "scenarios"}
+            className="utility-edge-tab utility-edge-tab-demo"
+            data-selected={active === "scenarios"}
+            onClick={(event) => toggle("scenarios", event.currentTarget)}
+            type="button"
+          >
+            <FlaskConical aria-hidden="true" size={18} />
+            <span>Demo scenarios</span>
+          </button>
+        </nav>
+      </div>
 
     </div>
   );

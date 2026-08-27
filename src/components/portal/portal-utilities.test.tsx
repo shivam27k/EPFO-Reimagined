@@ -17,7 +17,7 @@ vi.mock("@/components/assistant/assistant-panel", () => ({
     view,
   }: {
     contextStale?: boolean;
-    onViewChange?(view: "collapsed" | "docked" | "fullscreen"): void;
+    onViewChange?(view: "collapsed" | "docked"): void;
     onVoiceActiveChange?(active: boolean): void;
     modal?: boolean;
     snapshot?: MemberSnapshot;
@@ -25,7 +25,6 @@ vi.mock("@/components/assistant/assistant-panel", () => ({
   }) => (
     <div className="assistant-area" data-context-name={snapshot?.profile.displayName} data-context-stale={contextStale} data-modal={modal} data-view={view}>
       <button onClick={() => onViewChange?.("docked")} type="button">Ask EPF Sahayak</button>
-      <button onClick={() => onViewChange?.("fullscreen")} type="button">Maximize assistant</button>
       <button onClick={() => onViewChange?.("collapsed")} type="button">Collapse assistant</button>
       <button onClick={() => onVoiceActiveChange?.(true)} type="button">Activate mock voice</button>
       <input aria-label="Mock conversation draft" defaultValue="" />
@@ -114,27 +113,22 @@ describe("PortalUtilities", () => {
     expect(draft).toHaveValue("Keep this question");
   });
 
-  test("maximizes and collapses the assistant workspace", () => {
+  test("opens and collapses the assistant workspace without a fullscreen state", () => {
     render(<PortalUtilities snapshot={snapshot()} />);
     const utilities = screen.getByRole("button", { name: "Ask EPF Sahayak" }).closest(".portal-utilities");
 
     fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
-    fireEvent.click(screen.getByRole("button", { name: "Maximize assistant" }));
-    expect(utilities).toHaveAttribute("data-assistant-view", "fullscreen");
+    expect(utilities).toHaveAttribute("data-assistant-view", "docked");
+    expect(screen.queryByRole("button", { name: /maximize assistant/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Collapse assistant" }));
     expect(utilities).toHaveAttribute("data-assistant-view", "collapsed");
   });
 
-  test("makes the portal background inert only while the assistant is full screen", () => {
+  test("keeps the portal available beside the desktop docked assistant", () => {
     render(<><aside className="portal-sidebar" /><main className="portal-stage" /><nav className="mobile-navigation" /><PortalUtilities snapshot={snapshot()} /></>);
 
-    fireEvent.click(screen.getByRole("button", { name: "Maximize assistant" }));
-    expect(document.querySelector<HTMLElement>(".portal-sidebar")?.inert).toBe(true);
-    expect(document.querySelector<HTMLElement>(".portal-stage")?.inert).toBe(true);
-    expect(document.querySelector<HTMLElement>(".mobile-navigation")?.inert).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "Collapse assistant" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ask EPF Sahayak" }));
     expect(document.querySelector<HTMLElement>(".portal-sidebar")?.inert).toBe(false);
     expect(document.querySelector<HTMLElement>(".portal-stage")?.inert).toBe(false);
     expect(document.querySelector<HTMLElement>(".mobile-navigation")?.inert).toBe(false);
@@ -251,13 +245,6 @@ describe("PortalUtilities", () => {
     expect(document.querySelector<HTMLElement>(".utility-edge-rail")?.inert).toBe(true);
     expect(document.querySelector<HTMLElement>("#journey-utility-panel")?.inert).toBe(false);
 
-    fireEvent.click(screen.getByRole("button", { name: "Maximize assistant" }));
-    await waitFor(() => {
-      expect(document.querySelector<HTMLElement>(".assistant-area")?.inert).toBe(false);
-    });
-    expect(document.querySelector<HTMLElement>(".utility-edge-rail")?.inert).toBe(true);
-    expect(document.querySelector<HTMLElement>("#journey-utility-panel")?.inert).toBe(true);
-    expect(document.querySelector<HTMLElement>(".scenario-drawer")?.inert).toBe(true);
   });
 
   test("marks the utility rail while voice mode is active", () => {
