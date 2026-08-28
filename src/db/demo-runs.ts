@@ -3,6 +3,10 @@ import { and, eq, inArray, lt } from "drizzle-orm";
 import type { DemoPersona } from "../domain/types";
 import { ensureDatabaseReady, getDb } from "./client";
 import {
+  assistantProposals,
+  assistantTurns,
+  assistantContinuations,
+  assistantDocumentSources,
   claimEvents,
   claims,
   contributions,
@@ -44,6 +48,12 @@ async function deleteRunMutableData(
   tx: Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0],
   demoRunId: string,
 ) {
+  // Reset invalidates pending consent even if re-seeding recreates identical rows.
+  // Historical immutable receipts remain until disposal of the entire demo run.
+  await tx.update(assistantProposals).set({ status: "stale" }).where(and(eq(assistantProposals.runId, demoRunId), eq(assistantProposals.status, "pending")));
+  await tx.update(assistantTurns).set({ expiresAt: nowIso() }).where(eq(assistantTurns.runId, demoRunId));
+  await tx.update(assistantContinuations).set({ state: "expired", expiresAt: nowIso() }).where(eq(assistantContinuations.runId, demoRunId));
+  await tx.delete(assistantDocumentSources).where(eq(assistantDocumentSources.runId, demoRunId));
   await tx.delete(onboardingDrafts).where(eq(onboardingDrafts.demoRunId, demoRunId));
   await tx.delete(simulationEvents).where(eq(simulationEvents.demoRunId, demoRunId));
   await tx.delete(externalAdapterEvents).where(eq(externalAdapterEvents.demoRunId, demoRunId));

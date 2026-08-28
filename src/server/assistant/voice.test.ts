@@ -12,6 +12,15 @@ import {
   transcribeAssistantAudio,
 } from "./voice";
 
+type AssistantTtsConfig = { model: string; voice: string };
+
+async function getTtsConfigReader(): Promise<(env: Record<string, string | undefined>) => AssistantTtsConfig> {
+  const voiceModule = await import("./voice") as unknown as Record<string, unknown>;
+  const reader = voiceModule.readAssistantTtsConfig;
+  expect(reader).toBeTypeOf("function");
+  return reader as (env: Record<string, string | undefined>) => AssistantTtsConfig;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   delete process.env.OPENAI_API_KEY;
@@ -49,6 +58,58 @@ describe("assistant speech text", () => {
     expect(toSpeechText("**Next step:** [Open Claims](/claims)\n- Review bank details")).toBe(
       "Next step: Open Claims. Review bank details",
     );
+  });
+});
+
+describe("recorded TTS configuration", () => {
+  it("defaults to cedar on gpt-4o-mini-tts without reading Realtime settings", async () => {
+    const readAssistantTtsConfig = await getTtsConfigReader();
+
+    expect(readAssistantTtsConfig({
+      OPENAI_REALTIME_VOICE: "not-a-realtime-voice",
+      OPENAI_REALTIME_VAD: "client_vad",
+    })).toEqual({ model: "gpt-4o-mini-tts", voice: "cedar" });
+  });
+
+  it("preserves supported explicit current and legacy voice overrides", async () => {
+    const readAssistantTtsConfig = await getTtsConfigReader();
+
+    expect(readAssistantTtsConfig({ OPENAI_TTS_VOICE: "marin" })).toEqual({
+      model: "gpt-4o-mini-tts",
+      voice: "marin",
+    });
+    expect(readAssistantTtsConfig({
+      OPENAI_TTS_MODEL: "tts-1",
+      OPENAI_TTS_VOICE: "coral",
+    })).toEqual({ model: "tts-1", voice: "coral" });
+  });
+
+  it("uses onyx when an explicit legacy TTS model has no voice override", async () => {
+    const readAssistantTtsConfig = await getTtsConfigReader();
+
+    expect(readAssistantTtsConfig({ OPENAI_TTS_MODEL: "tts-1-hd" })).toEqual({
+      model: "tts-1-hd",
+      voice: "onyx",
+    });
+  });
+
+  it("uses onyx when a copied example leaves the voice blank for a legacy model", async () => {
+    const readAssistantTtsConfig = await getTtsConfigReader();
+
+    expect(readAssistantTtsConfig({
+      OPENAI_TTS_MODEL: "tts-1",
+      OPENAI_TTS_VOICE: "",
+    })).toEqual({ model: "tts-1", voice: "onyx" });
+  });
+
+  it("rejects unsupported presets and voices that legacy TTS models cannot use", async () => {
+    const readAssistantTtsConfig = await getTtsConfigReader();
+
+    expect(() => readAssistantTtsConfig({ OPENAI_TTS_VOICE: "not-a-voice" })).toThrow(/voice/i);
+    expect(() => readAssistantTtsConfig({
+      OPENAI_TTS_MODEL: "tts-1",
+      OPENAI_TTS_VOICE: "cedar",
+    })).toThrow(/tts-1|voice/i);
   });
 });
 
@@ -90,7 +151,7 @@ describe("OpenAI voice adapters", () => {
     );
   });
 
-  it("uses the default speech model and voice", async () => {
+  it("uses the cedar default without upgrading the recorded TTS model", async () => {
     process.env.OPENAI_API_KEY = "server-only-key";
     const speechCreate = vi.fn().mockResolvedValue({ arrayBuffer: () => Promise.resolve(new ArrayBuffer(2)) });
     openAiMock.mockImplementation(function () {
@@ -100,7 +161,22 @@ describe("OpenAI voice adapters", () => {
     await synthesizeAssistantSpeech("Answer");
 
     expect(speechCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "gpt-4o-mini-tts", voice: "coral" }),
+      expect.objectContaining({ model: "gpt-4o-mini-tts", voice: "cedar" }),
+    );
+  });
+
+  it("uses the compatible onyx fallback for an explicit legacy TTS model", async () => {
+    process.env.OPENAI_API_KEY = "server-only-key";
+    process.env.OPENAI_TTS_MODEL = "tts-1";
+    const speechCreate = vi.fn().mockResolvedValue({ arrayBuffer: () => Promise.resolve(new ArrayBuffer(2)) });
+    openAiMock.mockImplementation(function () {
+      return { audio: { speech: { create: speechCreate } } };
+    });
+
+    await synthesizeAssistantSpeech("Answer");
+
+    expect(speechCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "tts-1", voice: "onyx" }),
     );
   });
 

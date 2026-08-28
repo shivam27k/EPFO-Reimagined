@@ -4,28 +4,33 @@ import { ensureDatabaseReady, getDb } from "@/db/client";
 import { contributions, employments, serviceRequests } from "@/db/schema";
 import { recordExternalEvent } from "./event-log";
 import type { ExternalEventResult, PostContributionCommand, UpdateExitDateCommand } from "./types";
+import type { ActionTransaction } from "@/server/assistant/action-contracts";
 
 type EmployerCommand = UpdateExitDateCommand | PostContributionCommand;
 
 export const employerAdapter = {
   async execute(command: EmployerCommand): Promise<ExternalEventResult> {
     await ensureDatabaseReady();
-    const recordedAt = "2026-08-02T10:30:00.000Z";
+    return getDb().transaction((tx) => executeEmployerInTransaction(tx, command));
+  },
+};
 
-    return getDb().transaction(async (tx) => {
+export async function executeEmployerInTransaction(tx: ActionTransaction, command: EmployerCommand): Promise<ExternalEventResult> {
+    const recordedAt = "2026-08-02T10:30:00.000Z";
       if (command.type === "POST_CONTRIBUTION") {
-        const [row] = await tx
+        const rows = await tx
           .select({ id: contributions.id, postingStatus: contributions.postingStatus })
           .from(contributions)
           .innerJoin(employments, eq(contributions.employmentId, employments.id))
           .where(and(
             eq(employments.demoRunId, command.demoRunId),
             eq(contributions.wageMonth, command.wageMonth),
+            command.employmentId ? eq(employments.id, command.employmentId) : undefined,
           ));
-
-        if (!row) {
-          throw new Error("Contribution record not found for this demo run.");
+        if (rows.length !== 1) {
+          throw new Error("Choose one unambiguous recorded employment and contribution month.");
         }
+        const row = rows[0];
 
         const result: ExternalEventResult = {
           actor: "EMPLOYER",
@@ -76,6 +81,4 @@ export const employerAdapter = {
       await recordExternalEvent(tx, command.demoRunId, result, recordedAt);
 
       return result;
-    });
-  },
-};
+}

@@ -174,7 +174,7 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
 
     try {
       const response = await fetch("/api/member/snapshot", { cache: "no-store", signal: controller.signal });
-      if (controller.signal.aborted || generation !== refreshGeneration.current) return;
+      if (controller.signal.aborted || generation !== refreshGeneration.current) return false;
       if (!response.ok) {
         setRefreshedContext((current) => ({
           pathname,
@@ -182,11 +182,12 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
           snapshot: current?.pathname === pathname && current.source === snapshot ? current.snapshot : snapshot,
           stale: true,
         }));
-        return;
+        return false;
       }
       const refreshedSnapshot = await response.json() as MemberSnapshot;
-      if (controller.signal.aborted || generation !== refreshGeneration.current) return;
+      if (controller.signal.aborted || generation !== refreshGeneration.current) return false;
       setRefreshedContext({ pathname, source: snapshot, snapshot: refreshedSnapshot, stale: false });
+      return true;
     } catch {
       if (!controller.signal.aborted && generation === refreshGeneration.current) {
         setRefreshedContext((current) => ({
@@ -196,6 +197,7 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
           stale: true,
         }));
       }
+      return false;
     } finally {
       if (refreshController.current === controller) refreshController.current = null;
     }
@@ -223,6 +225,14 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
 
   function closeAll() {
     setUtilityState({ pathname, active: null });
+  }
+
+  function openAssistantUtility(panel: "journey" | "demo") {
+    if (voiceActive || assistantModal) return false;
+    const next: ActiveUtility = panel === "demo" ? "scenarios" : "journey";
+    setUtilityState({ pathname, active: next });
+    void refreshUtilitySnapshot();
+    return true;
   }
 
   function changeAssistantView(view: AssistantWorkspaceView) {
@@ -289,6 +299,9 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
       <div className="assistant-dock">
         <AssistantPanel
           contextStale={contextStale}
+          utilityPanel={active === "scenarios" ? "demo" : active}
+          onOpenUtility={openAssistantUtility}
+          onRefreshContext={refreshUtilitySnapshot}
           modal={responsiveAssistantModal}
           onViewChange={changeAssistantView}
           onVoiceActiveChange={setVoiceActive}

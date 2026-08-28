@@ -20,6 +20,7 @@ export interface PostContributionCommand {
   type: "POST_CONTRIBUTION";
   demoRunId: string;
   wageMonth: string;
+  employmentId?: string;
 }
 
 export interface VerifyBankAccountCommand {

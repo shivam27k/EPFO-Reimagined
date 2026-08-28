@@ -233,7 +233,7 @@ async function persistOnboardingDraft(
   });
 }
 
-function draftDto(row: typeof onboardingDrafts.$inferSelect): OnboardingDraftDto {
+export function draftDto(row: typeof onboardingDrafts.$inferSelect): OnboardingDraftDto {
   return {
     currentStep: row.currentStep,
     disclosureAccepted: row.disclosureAccepted,
@@ -286,6 +286,50 @@ function maskedPatchValue(key: keyof typeof sensitiveDraftColumns, value: string
   if (key === "memberId") return maskMemberId(value);
   if (key === "panNumber") return maskPan(value);
   return maskBankAccount(value);
+}
+
+export type StoredOnboardingPatch = {
+  values: Record<string, string | boolean>;
+  maskedValues: Partial<Record<keyof typeof sensitiveDraftColumns, string>>;
+  fields: string[];
+};
+
+/** Call only after normal field validation. Raw identifiers are not persisted. */
+export function maskValidatedOnboardingPatch(values: Record<string, string | boolean>): StoredOnboardingPatch {
+  const stored: StoredOnboardingPatch = { values: {}, maskedValues: {}, fields: Object.keys(values).sort() };
+  for (const [field, value] of Object.entries(values)) {
+    if (field in sensitiveDraftColumns) {
+      const key = field as keyof typeof sensitiveDraftColumns;
+      stored.maskedValues[key] = maskedPatchValue(key, String(value));
+    } else stored.values[field] = value;
+  }
+  return stored;
+}
+
+/** Trusted, previously validated and masked persisted payload; never a request body. */
+export async function applyStoredOnboardingPatchInTransaction(
+  tx: OnboardingTransaction, demoRunId: string, patch: StoredOnboardingPatch,
+) {
+  await assertNewMemberRun(tx, demoRunId);
+  const [existing] = await tx.select().from(onboardingDrafts).where(eq(onboardingDrafts.demoRunId, demoRunId));
+  const values = { ...(existing ? JSON.parse(existing.valuesJson) : {}), ...patch.values };
+  const furthest = Math.max(0, ...patch.fields.map((field) => {
+    const question = processDefinitions.ONBOARDING.questions.find((item) => item.key === field);
+    if (!question) throw new Error("Stored onboarding field is unavailable.");
+    return onboardingSteps.findIndex((step) => step.key === question.step);
+  }));
+  const row = {
+    demoRunId, currentStep: Math.max(existing?.currentStep ?? 0, furthest), disclosureAccepted: true,
+    valuesJson: JSON.stringify(values),
+    uanMasked: patch.maskedValues.uan ?? existing?.uanMasked ?? null,
+    mobileMasked: patch.maskedValues.mobileNumber ?? existing?.mobileMasked ?? null,
+    memberIdMasked: patch.maskedValues.memberId ?? existing?.memberIdMasked ?? null,
+    panMasked: patch.maskedValues.panNumber ?? existing?.panMasked ?? null,
+    bankAccountMasked: patch.maskedValues.bankAccountNumber ?? existing?.bankAccountMasked ?? null,
+    updatedAt: new Date().toISOString(),
+  };
+  await tx.insert(onboardingDrafts).values(row).onConflictDoUpdate({ target: onboardingDrafts.demoRunId, set: row });
+  return draftDto(row);
 }
 
 export async function applyConfirmedOnboardingPatch(

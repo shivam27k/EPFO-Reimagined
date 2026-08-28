@@ -1,5 +1,5 @@
 import type { OnboardingQuestionKey } from "./process-definitions";
-import type { OnboardingEditableValues } from "./onboarding-schema";
+import type { OnboardingDraftDto, OnboardingEditableValues } from "./onboarding-schema";
 
 export const ASSISTANT_VALIDATION_EVENT = "epf:assistant-validation";
 export const ASSISTANT_PATCH_APPLIED_EVENT = "epf:assistant-patch-applied";
@@ -13,4 +13,6 @@ export interface AssistantValidationEventDetail {
 
 export interface AssistantPatchAppliedEventDetail {
   values: Partial<OnboardingEditableValues>;
+  maskedValues?: OnboardingDraftDto["maskedValues"];
+  receiptId?: string;
 }

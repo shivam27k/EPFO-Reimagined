@@ -2,10 +2,13 @@ import { z, ZodError } from "zod";
 
 import { AuthenticationError, requireCurrentRun } from "@/server/auth/session";
 import { respondToMember } from "@/server/assistant/respond";
+import { redactModelText } from "@/server/assistant/model-text";
+import { randomUUID } from "node:crypto";
+import { registerUserTurn } from "@/server/assistant/trusted-turns";
+import { assistantHttpError, assistantJson, assistantRouteSchema, requireAssistantRequest } from "@/server/assistant/http";
 import {
   dismissProactivePrompt,
   getAssistantState,
-  sanitizeMemberMessage,
   storeAssistantExchange,
   storeProposalDecision,
   resolveFormPatchProposal,
@@ -13,9 +16,9 @@ import {
 
 const assistantRequestSchema = z.object({
   message: z.string().min(1).max(1000),
-  route: z.string().min(1).max(120),
+  route: assistantRouteSchema,
   visibleScreenText: z.string().max(6000).optional(),
-});
+}).strict();
 
 const assistantStateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("DISMISS_PROMPT"), promptKey: z.string().min(1).max(120) }),
@@ -41,18 +44,30 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const current = await requireCurrentRun();
+    if (request.signal.aborted) return Response.json({ error: "Assistant request cancelled." }, { status: 499 });
+    const current = await requireAssistantRequest(request);
     const input = assistantRequestSchema.parse(await request.json());
-    const safeMessage = sanitizeMemberMessage(input.message);
+    const { turnId } = await registerUserTurn(current.demoRun.id, { requestKey: randomUUID(), mode: "text", route: input.route, text: input.message });
+    const safeMessage = redactModelText(input.message, current.demoRun.id);
     const reply = await respondToMember({
       demoRunId: current.demoRun.id,
       route: input.route,
       message: safeMessage,
+      turnId,
       visibleScreenText: input.visibleScreenText,
+      signal: request.signal,
     });
-    await storeAssistantExchange(current.demoRun.id, safeMessage, reply);
-    return Response.json(reply);
+    if (request.signal.aborted) return Response.json({ error: "Assistant request stopped. Committed receipts remain valid; inspect action status.", actionProgress: reply.actionProgress }, { status: 499 });
+    try {
+      if (!reply.continuationId) await storeAssistantExchange(current.demoRun.id, safeMessage, reply);
+    } catch {
+      // Conversation logging is not the transaction authority. Never discard a
+      // committed action receipt because this later, independent log write failed.
+      return assistantJson({ ...reply, historyStored: false });
+    }
+    return assistantJson(reply);
   } catch (error) {
+    if (request.signal.aborted) return Response.json({ error: "Assistant request cancelled." }, { status: 499 });
     if (error instanceof AuthenticationError) {
       return Response.json({ error: "Authentication required." }, { status: 401 });
     }
@@ -62,7 +77,7 @@ export async function POST(request: Request) {
     if (error instanceof SyntaxError) {
       return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
     }
-    return Response.json({ error: "The assistant is temporarily unavailable. Use the visible page actions to continue." }, { status: 500 });
+    return assistantHttpError(error);
   }
 }
 

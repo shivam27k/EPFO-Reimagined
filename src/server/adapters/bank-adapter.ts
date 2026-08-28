@@ -4,18 +4,23 @@ import { ensureDatabaseReady, getDb } from "@/db/client";
 import { kycRecords, memberProfiles, scenarioRuns } from "@/db/schema";
 import { recordExternalEvent } from "./event-log";
 import type { ExternalEventResult, VerifyBankAccountCommand } from "./types";
+import type { ActionTransaction } from "@/server/assistant/action-contracts";
 
 export const bankAdapter = {
   async execute(command: VerifyBankAccountCommand): Promise<ExternalEventResult> {
     await ensureDatabaseReady();
-    const recordedAt = "2026-08-02T10:35:00.000Z";
+    return getDb().transaction((tx) => verifyBankInTransaction(tx, command));
+  },
+};
 
-    return getDb().transaction(async (tx) => {
+export async function verifyBankInTransaction(tx: ActionTransaction, command: VerifyBankAccountCommand): Promise<ExternalEventResult> {
+    const recordedAt = "2026-08-02T10:35:00.000Z";
       const rows = await tx
-        .select({ status: kycRecords.status })
+        .select({ status: kycRecords.status, type: kycRecords.type })
         .from(kycRecords)
         .where(eq(kycRecords.demoRunId, command.demoRunId));
-      const previousBank = rows.find((row) => row.status === "MISMATCH");
+      const previousBank = rows.find((row) => row.type === "BANK");
+      if (!previousBank) throw new Error("Bank record not found for this demo run.");
       const result: ExternalEventResult = {
         actor: "BANK",
         eventType: "VERIFY_BANK_ACCOUNT",
@@ -49,6 +54,4 @@ export const bankAdapter = {
         ));
       await recordExternalEvent(tx, command.demoRunId, result, recordedAt);
       return result;
-    });
-  },
-};
+}

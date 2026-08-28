@@ -216,10 +216,16 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
     expect(screen.getByRole("button", { name: "End voice mode" })).toBeEnabled();
   });
 
-  it("starts one persistent SDP session and attaches streamed remote audio", async () => {
+  it("starts one persistent SDP session with preferred capture processing and attaches streamed remote audio", async () => {
     const { peer } = await beginRealtimeSession();
 
-    expect(getUserMedia).toHaveBeenCalledWith({ audio: true });
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
     expect(peer.addTrack).toHaveBeenCalledWith(expect.anything(), expect.anything());
     expect(fetchMock).toHaveBeenCalledWith("/api/assistant/realtime?route=%2Foverview", {
       method: "POST",
@@ -234,6 +240,40 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
     expect(FakeRemoteAudio.instances[0]).toMatchObject({ autoplay: true, srcObject: remoteStream });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls.every(([url]) => !String(url).match(/\/(transcribe|speech)$/))).toBe(true);
+  });
+
+  it("retries without optional processing constraints only when they are unsupported", async () => {
+    getUserMedia
+      .mockRejectedValueOnce(new DOMException("Unsupported constraint", "OverconstrainedError"))
+      .mockResolvedValueOnce(createMicrophoneStream());
+
+    await beginRealtimeSession();
+
+    expect(getUserMedia).toHaveBeenNthCalledWith(1, {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    expect(getUserMedia).toHaveBeenNthCalledWith(2, { audio: true });
+  });
+
+  it("retries without optional processing constraints when the browser reports them as unsupported", async () => {
+    getUserMedia
+      .mockRejectedValueOnce(new DOMException("Unsupported constraint", "NotSupportedError"))
+      .mockResolvedValueOnce(createMicrophoneStream());
+
+    await beginRealtimeSession();
+
+    expect(getUserMedia).toHaveBeenNthCalledWith(1, {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    expect(getUserMedia).toHaveBeenNthCalledWith(2, { audio: true });
   });
 
   it("renders incremental user and assistant captions only after script sanitization", async () => {
@@ -458,6 +498,7 @@ describe("AssistantVoiceControl Realtime WebRTC mode", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Microphone permission was denied");
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Open text chat" })).toBeEnabled();
   });
 

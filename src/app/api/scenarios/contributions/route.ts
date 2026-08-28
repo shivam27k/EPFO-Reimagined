@@ -1,8 +1,7 @@
-import { and, eq } from "drizzle-orm";
 import { z, ZodError } from "zod";
 
 import { ensureDatabaseReady, getDb } from "@/db/client";
-import { contributions, employments } from "@/db/schema";
+import { loadMissingContributionInTransaction } from "@/server/services/contribution-service";
 import { AuthenticationError, requireCurrentRun } from "@/server/auth/session";
 import { employerAdapter } from "@/server/adapters/employer-adapter";
 import { getMemberSnapshot } from "@/server/repositories/member-repository";
@@ -14,18 +13,7 @@ const contributionScenarioSchema = z.object({
 
 async function loadMissingContribution(demoRunId: string, wageMonth: string) {
   await ensureDatabaseReady();
-  const employmentRows = await getDb()
-    .select({ id: employments.id })
-    .from(employments)
-    .where(eq(employments.demoRunId, demoRunId));
-  const employmentId = employmentRows[0]?.id;
-  if (!employmentId) {
-    throw new Error("Employment record not found for this demo run.");
-  }
-  await getDb().update(contributions).set({ postingStatus: "MISSING" }).where(and(
-    eq(contributions.wageMonth, wageMonth),
-    eq(contributions.employmentId, employmentId),
-  ));
+  await getDb().transaction((tx) => loadMissingContributionInTransaction(tx, demoRunId, wageMonth));
 }
 
 export async function POST(request: Request) {

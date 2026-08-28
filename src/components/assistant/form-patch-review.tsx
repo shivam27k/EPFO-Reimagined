@@ -14,12 +14,16 @@ export function FormPatchReview({
   proposals,
   scope,
   pending,
+  disabled = false,
+  prepareOnly = false,
   onConfirm,
   onCancel,
 }: {
   proposals: FormFieldProposal[];
   scope: FormPatchScope;
   pending: boolean;
+  disabled?: boolean;
+  prepareOnly?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -49,13 +53,13 @@ export function FormPatchReview({
           </article>
         ))}
       </div>
-      <p className="patch-boundary">Confirming saves a synthetic onboarding draft only. It never accepts a legal declaration or submits a claim.</p>
+      <p className="patch-boundary">{prepareOnly ? "Prepare an exact stored proposal first. No draft fields are saved until you review and confirm that proposal." : "Confirming saves a synthetic onboarding draft only. It never accepts a legal declaration or submits a claim."}</p>
       {requiresReExtraction ? <p className="patch-boundary">Sensitive proposed values were masked when this run was saved. Re-run the synthetic extraction before applying them.</p> : null}
       <div className="patch-actions">
-        <button className="primary-action" disabled={pending || requiresReExtraction} onClick={onConfirm} type="button">
-          <Check aria-hidden="true" size={17} /> {pending ? "Applying…" : "Confirm proposed changes"}
+        <button className="primary-action" disabled={disabled || pending || requiresReExtraction} onClick={onConfirm} type="button">
+          <Check aria-hidden="true" size={17} /> {pending ? "Working…" : prepareOnly ? "Prepare exact review" : "Confirm proposed changes"}
         </button>
-        <button className="secondary-action" disabled={pending} onClick={onCancel} type="button">
+        <button className="secondary-action" disabled={disabled || pending} onClick={onCancel} type="button">
           <X aria-hidden="true" size={17} /> Cancel
         </button>
       </div>

@@ -1,136 +1,110 @@
-import {
-  describePortalAction,
-  destinationRoutes,
-  workflowRoutes,
-  type PortalAction,
-  type PortalActionResult,
-} from "@/domain/portal-actions";
+import { uiDestination, type UiObservation, type UiRequest } from "@/domain/assistant-ui";
 
-export type PendingPortalAction = Extract<PortalAction, { name: "propose_demo_action" }>;
-
-type CoordinatorDependencies = {
-  pathname: string;
+export type BrowserActionState = {
+  pathname: string; modal: boolean; voiceActive: boolean;
+  utilityPanel: "journey" | "demo" | null; documentOpen: boolean;
+};
+type Dependencies = {
+  current: () => BrowserActionState;
   navigate: (route: string) => void;
-  refresh: () => void;
-  pendingAction: PendingPortalAction | null;
-  setPendingAction: (action: PendingPortalAction | null) => void;
-  employmentId?: string;
-  request?: typeof fetch;
+  openUtility: (panel: "journey" | "demo") => boolean;
+  openDocument: () => void;
+  signal: AbortSignal;
 };
-
-const QUEUED_TARGET_KEY = "epf-sahayak:queued-target";
-
-function currentPageScrollTop(): number {
-  return Math.max(window.scrollY, document.documentElement.scrollTop, document.body.scrollTop);
+function visible(element: HTMLElement | null): element is HTMLElement {
+  if (!element || element.closest('[inert], [hidden], [aria-hidden="true"]')) return false;
+  const bounds = element.getBoundingClientRect();
+  return element.getClientRects().length > 0 && bounds.width > 0 && bounds.height > 0;
 }
-
-function scrollPage(destination: "top" | "up" | "down" | "bottom"): PortalActionResult {
-  const current = currentPageScrollTop();
-  const maximum = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-  const pageStep = Math.max(1, Math.round(window.innerHeight * 0.8));
-  const top = destination === "top" ? 0
-    : destination === "bottom" ? maximum
-      : destination === "up" ? Math.max(0, current - pageStep)
-        : Math.min(maximum, current + pageStep);
-
-  window.scrollTo({ behavior: "auto", left: 0, top });
-  const actual = currentPageScrollTop();
-  if (Math.abs(actual - top) > 1) {
-    return { status: "failed", message: `I could not verify that the page scrolled ${destination}.` };
-  }
-
-  const message = destination === "top" ? "Scrolled to the top of the page."
-    : destination === "bottom" ? "Scrolled to the bottom of the page."
-      : `Scrolled ${destination}.`;
-  return { status: "completed", message };
+function inViewport(element: HTMLElement) {
+  const rect = element.getBoundingClientRect();
+  return rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth;
 }
-
-function revealTarget(target: string): boolean {
-  const element = document.querySelector<HTMLElement>(`[data-assistant-target="${target}"]`);
-  if (!element) return false;
-  const disclosure = element.matches("details") ? element as HTMLDetailsElement : element.closest("details");
-  if (disclosure) disclosure.open = true;
-  element.scrollIntoView({ behavior: "smooth", block: "center" });
-  const focusable = element.matches("button,a,input,select,textarea,summary,[tabindex]")
-    ? element
-    : element.querySelector<HTMLElement>("button,a,input,select,textarea,summary,[tabindex]");
-  focusable?.focus({ preventScroll: true });
-  return true;
+function frame(signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) { reject(signal.reason); return; }
+    const abort = () => { clearTimeout(timer); reject(signal.reason); };
+    const timer = setTimeout(() => { signal.removeEventListener("abort", abort); resolve(); }, 50);
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
+const scrollTop = () => Math.max(window.scrollY, document.documentElement.scrollTop, document.body.scrollTop);
 
-export function consumeQueuedPortalTarget(): boolean {
-  const target = sessionStorage.getItem(QUEUED_TARGET_KEY);
-  if (!target) return false;
-  if (!revealTarget(target)) return false;
-  sessionStorage.removeItem(QUEUED_TARGET_KEY);
-  return true;
-}
-
-const demoRequests: Record<string, { url: string; method: "POST" | "PATCH"; body: Record<string, string> }> = {
-  simulate_bank_correction: { url: "/api/scenarios/bank", method: "POST", body: { command: "SIMULATE_BANK_CORRECTION" } },
-  load_missing_contribution: { url: "/api/scenarios/contributions", method: "POST", body: { command: "LOAD_MISSING_CONTRIBUTION" } },
-  simulate_ecr_posting: { url: "/api/scenarios/contributions", method: "POST", body: { command: "SIMULATE_ECR_POSTING" } },
-  simulate_two_month_wait: { url: "/api/claims", method: "PATCH", body: { command: "SIMULATE_TWO_MONTH_WAIT" } },
-  simulate_cryptic_claim_status: { url: "/api/claims", method: "PATCH", body: { command: "SIMULATE_CRYPTIC_STATUS" } },
-  simulate_epfo_approval: { url: "/api/claims", method: "PATCH", body: { command: "SIMULATE_EPFO_APPROVAL" } },
-  simulate_payment_returned: { url: "/api/claims", method: "PATCH", body: { command: "SIMULATE_PAYMENT_RETURNED" } },
-  simulate_bank_payment: { url: "/api/claims", method: "PATCH", body: { command: "SIMULATE_BANK_PAYMENT" } },
-};
-
-export async function executePortalAction(action: PortalAction, deps: CoordinatorDependencies): Promise<PortalActionResult> {
-  if (action.name === "navigate_to") {
-    const route = destinationRoutes[action.arguments.destination];
-    deps.navigate(route);
-    return { status: "completed", message: `Opened ${action.arguments.destination}.`, route };
+/** Only server-issued allowlisted requests enter here. Completion is observed,
+ * not inferred from router.push/setState. There is no mutation coordinator. */
+export async function executePortalAction(request: UiRequest, deps: Dependencies): Promise<UiObservation> {
+  const action = request.action;
+  const expected = uiDestination(action);
+  const deadline = Math.min(Date.parse(request.expiresAt), Date.now() + 8_000);
+  const initial = deps.current();
+  const blocked = (): UiObservation => ({ status: "unavailable", reason: "focus_blocked" });
+  if (deps.signal.aborted) return { status: "cancelled", reason: "cancelled" };
+  if (Date.now() >= deadline) return { status: "failed", reason: "timeout" };
+  // Utility drawers make the assistant inert. Never put active voice controls
+  // behind them, or open them beneath the mobile assistant focus trap.
+  if (action.name === "open_utility_panel" && (initial.voiceActive || initial.modal)) return blocked();
+  if (action.name === "open_document_review" && initial.voiceActive) return blocked();
+  if ((action.name === "focus_control" || action.name === "reveal_section" ||
+      action.name === "scroll_page" || expected.target) && (initial.modal || initial.utilityPanel)) return blocked();
+  if (action.name === "open_utility_panel" && !deps.openUtility(action.arguments.panel)) return blocked();
+  if (action.name === "open_document_review") deps.openDocument();
+  if (expected.route && initial.pathname !== expected.route) deps.navigate(expected.route);
+  let target: HTMLElement | null = null;
+  let expectedScrollTop: number | undefined;
+  if (action.name === "scroll_page") {
+    const maximum = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    const destination = action.arguments.destination;
+    expectedScrollTop = destination === "top" ? 0 : destination === "bottom" ? maximum
+      : destination === "up" ? Math.max(0, scrollTop() - window.innerHeight * 0.8)
+      : Math.min(maximum, scrollTop() + window.innerHeight * 0.8);
+    window.scrollTo({ top: expectedScrollTop, left: 0, behavior: "instant" });
   }
-  if (action.name === "start_workflow") {
-    const destination = workflowRoutes[action.arguments.workflow];
-    if (destination.target && destination.route === deps.pathname) {
-      if (!revealTarget(destination.target)) return { status: "unavailable", message: "That workflow control is not available on this screen." };
-    } else {
-      if (destination.target) sessionStorage.setItem(QUEUED_TARGET_KEY, destination.target);
-      deps.navigate(destination.route);
-    }
-    return { status: "completed", message: `Opened ${action.arguments.workflow.replaceAll("_", " ")}.`, route: destination.route, target: destination.target };
-  }
-  if (action.name === "scroll_page") return scrollPage(action.arguments.destination);
-  if (action.name === "reveal_section" || action.name === "focus_control") {
-    const completed = revealTarget(action.arguments.target);
-    return completed
-      ? { status: "completed", message: `Showing ${action.arguments.target.replaceAll(".", " ")}.`, target: action.arguments.target }
-      : { status: "unavailable", message: "That control is not available on the current screen." };
-  }
-  if (action.name === "propose_demo_action") {
-    if (deps.pendingAction) return { status: "confirmation_required", message: "Please confirm or cancel the current pending action first." };
-    deps.setPendingAction(action);
-    return { status: "confirmation_required", message: `${describePortalAction(action)} is ready. Ask the member to confirm or cancel.` };
-  }
-  if (action.name === "cancel_pending_action") {
-    if (!deps.pendingAction) return { status: "unavailable", message: "There is no pending action to cancel." };
-    deps.setPendingAction(null);
-    return { status: "cancelled", message: "Cancelled. Nothing changed." };
-  }
-  if (!deps.pendingAction) return { status: "unavailable", message: "There is no pending action to confirm." };
-
-  const pendingName = deps.pendingAction.arguments.action;
-  let request = demoRequests[pendingName];
-  if (pendingName === "simulate_employer_exit_date") {
-    if (!deps.employmentId) return { status: "unavailable", message: "No employment record is available for this action." };
-    request = { url: "/api/scenarios/employment", method: "POST", body: { command: "SIMULATE_EMPLOYER_EXIT_DATE", employmentId: deps.employmentId } };
-  }
-  if (!request) return { status: "unavailable", message: "That demo action is not available." };
   try {
-    const response = await (deps.request ?? fetch)(request.url, {
-      method: request.method,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(request.body),
-    });
-    const body = await response.json().catch(() => ({})) as { error?: string };
-    if (!response.ok) return { status: "failed", message: body.error || "The confirmed action could not be completed." };
-    deps.setPendingAction(null);
-    deps.refresh();
-    return { status: "completed", message: "Confirmed action completed. The page data has been refreshed." };
+    while (Date.now() < deadline) {
+      if (deps.signal.aborted) return { status: "cancelled", reason: "cancelled" };
+      const current = deps.current();
+      const routeReady = !expected.route || (current.pathname === expected.route &&
+        window.location.pathname === expected.route && !!document.getElementById("portal-content"));
+      if (routeReady && expected.target) {
+        // The target originates in the domain enum, never an arbitrary selector.
+        target = document.querySelector<HTMLElement>('[data-assistant-target="' + expected.target + '"]');
+        const disclosure = target?.matches("details") ? target as HTMLDetailsElement : target?.closest("details");
+        if (disclosure) disclosure.open = true;
+        if (visible(target)) {
+          target.scrollIntoView({ behavior: "instant", block: "center" });
+          if (action.name === "focus_control") {
+            const focusable = target.matches("button,a,input,select,textarea,summary,[tabindex]") ? target
+              : target.querySelector<HTMLElement>("button:not([disabled]),a,input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]");
+            if (visible(focusable)) focusable.focus({ preventScroll: true });
+          }
+          const focused = target === document.activeElement || target.contains(document.activeElement);
+          if (inViewport(target) && (action.name !== "focus_control" || focused)) {
+            return { status: "completed", route: current.pathname, target: expected.target, focused };
+          }
+        }
+      } else if (routeReady && action.name === "open_utility_panel") {
+        const panel = action.arguments.panel;
+        const element = document.getElementById(panel === "journey" ? "journey-utility-panel" : "scenario-utility-panel");
+        if (current.utilityPanel === panel && visible(element) && element.getAttribute("aria-hidden") !== "true") {
+          return { status: "completed", panel, route: current.pathname };
+        }
+      } else if (routeReady && action.name === "open_document_review") {
+        const element = document.getElementById("assistant-document-review");
+        if (current.documentOpen && visible(element)) {
+          // Keep the active voice control in view; do not move focus or the scroll
+          // container away from it just to expose the review form.
+          element.scrollIntoView({ behavior: "instant", block: "nearest" });
+          if (inViewport(element)) return { status: "completed", panel: "document", route: current.pathname };
+        }
+      } else if (routeReady && expectedScrollTop !== undefined) {
+        if (Math.abs(scrollTop() - expectedScrollTop) <= 2) {
+          return { status: "completed", route: current.pathname, scrollTop: scrollTop(), expectedScrollTop };
+        }
+      } else if (routeReady && document.getElementById("portal-content")) return { status: "completed", route: current.pathname };
+      await frame(deps.signal);
+    }
+    return { status: "failed", reason: expected.target && !target ? "missing_target" : "timeout" };
   } catch {
-    return { status: "failed", message: "The confirmed action could not be completed." };
+    return { status: deps.signal.aborted ? "cancelled" : "failed", reason: deps.signal.aborted ? "cancelled" : "timeout" };
   }
 }

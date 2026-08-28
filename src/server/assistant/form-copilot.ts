@@ -1,3 +1,23 @@
+import { onboardingRequestSchema } from "@/domain/onboarding-schema";
+import { processDefinitions, type OnboardingQuestionKey } from "@/domain/process-definitions";
+
+/** All-or-nothing validation; unsupported fields are reported, never dropped silently. */
+export function validateOnboardingFields(input: Record<string, unknown>) {
+  const values: Record<string, string | boolean> = {};
+  const errors: Record<string, string> = {};
+  const exclusions: string[] = [];
+  for (const [field, value] of Object.entries(input)) {
+    const question = processDefinitions.ONBOARDING.questions.find((item) => item.key === field);
+    if (!question) { exclusions.push(field); errors[field] = "Unsupported onboarding field."; continue; }
+    if (value === null || value === undefined) continue;
+    const parsed = onboardingRequestSchema.shape[question.key as OnboardingQuestionKey].safeParse(value);
+    if (!parsed.success) errors[field] = parsed.error.issues[0]?.message ?? "Invalid value.";
+    else values[field] = parsed.data;
+  }
+  if (!Object.keys(values).length && !Object.keys(errors).length) errors.patch = "Supply at least one field.";
+  return { valid: Object.keys(errors).length === 0, values, errors, exclusions };
+}
+
 export interface QuestionLike {
   key: string;
   label: string;

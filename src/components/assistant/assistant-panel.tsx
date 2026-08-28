@@ -5,13 +5,14 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  ASSISTANT_PATCH_APPLIED_EVENT,
   ASSISTANT_VALIDATION_EVENT,
-  type AssistantPatchAppliedEventDetail,
   type AssistantValidationEventDetail,
 } from "@/domain/assistant-events";
 import type { MemberSnapshot } from "@/domain/member-snapshot";
-import { describePortalAction, type PortalAction, type PortalActionResult } from "@/domain/portal-actions";
+import { destinationRoutes } from "@/domain/portal-actions";
+import { toolResultSchema, type ToolResult } from "@/domain/assistant-tools";
+import type { UiRequest } from "@/domain/assistant-ui";
+import type { AssistantReply } from "@/server/assistant/respond";
 import { processDefinitions } from "@/domain/process-definitions";
 import { buildQuestionBatches, type FormFieldProposal, type FormPatchScope } from "@/server/assistant/form-copilot";
 import type { AssistantActionProposal } from "@/server/assistant/tools";
@@ -21,7 +22,10 @@ import { FormPatchReview } from "./form-patch-review";
 import { ProactivePrompt, type ProactivePromptModel } from "./proactive-prompt";
 import type { AssistantWorkspaceView } from "./assistant-workspace-state";
 import { captureVisibleScreenText } from "./visible-screen-context";
-import { consumeQueuedPortalTarget, executePortalAction, type PendingPortalAction } from "./portal-action-coordinator";
+import { executePortalAction, type BrowserActionState } from "./portal-action-coordinator";
+import { assistantRequest, finishTextContinuation, recoverCall } from "./assistant-transport";
+import { rememberCall, useAssistantActions } from "./use-assistant-actions";
+import { AssistantActionProgress, PersistedActionReview } from "./persisted-action-review";
 
 interface Message {
   role: "member" | "assistant";
@@ -106,6 +110,9 @@ export function AssistantPanel({
   onVoiceActiveChange,
   modal = false,
   suppressPrompt = false,
+  utilityPanel = null,
+  onOpenUtility,
+  onRefreshContext,
 }: {
   snapshot: MemberSnapshot;
   view?: AssistantWorkspaceView;
@@ -114,6 +121,9 @@ export function AssistantPanel({
   onVoiceActiveChange?: (active: boolean) => void;
   modal?: boolean;
   suppressPrompt?: boolean;
+  utilityPanel?: "journey" | "demo" | null;
+  onOpenUtility?: (panel: "journey" | "demo") => boolean;
+  onRefreshContext?: () => Promise<boolean>;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -142,10 +152,37 @@ export function AssistantPanel({
   const [patchScope, setPatchScope] = useState<FormPatchScope>("SECTION");
   const [patchPending, setPatchPending] = useState(false);
   const [extractionMessage, setExtractionMessage] = useState("");
-  const [pendingPortalAction, setPendingPortalAction] = useState<PendingPortalAction | null>(null);
+  const [documentSourceId, setDocumentSourceId] = useState<string | null>(null);
+  const [cancellationVersion, setCancellationVersion] = useState(0);
+  const expectedNavigation = useRef<string | null>(null);
+  const previousPathname = useRef(pathname);
+  const documentPrepareEvent = useRef<{ key: string; requestKey: string; callId: string } | null>(null);
   const workspaceView = view ?? internalView;
   const workspaceOpen = workspaceView !== "collapsed";
   const workspaceModal = modal;
+  const browserState = useRef<BrowserActionState>({ pathname, modal, voiceActive, utilityPanel, documentOpen });
+  useEffect(() => {
+    browserState.current = { pathname, modal, voiceActive, utilityPanel, documentOpen };
+  }, [pathname, modal, voiceActive, utilityPanel, documentOpen]);
+  const cancelWork = useCallback(() => {
+    textRequestController.current?.abort();
+    textRequestController.current = null;
+    textRequestGeneration.current += 1;
+    expectedNavigation.current = null;
+    setPending(false);
+    setCancellationVersion((current) => current + 1);
+  }, []);
+  const refreshAfterCommit = useCallback(async () => {
+    router.refresh();
+    return onRefreshContext ? onRefreshContext() : false;
+  }, [onRefreshContext, router]);
+  const actions = useAssistantActions(pathname, refreshAfterCommit, cancelWork);
+  const handleVoiceResult = useCallback((result: ToolResult, current = false) => {
+    actions.acceptResult(result, current);
+    // Recovered proposals are only status hints. Restore the current proposal
+    // from the server instead of replacing it with a historical call payload.
+    if (!current && result.data?.proposal) void actions.reload();
+  }, [actions.acceptResult, actions.reload]);
 
   useEffect(() => {
     onVoiceActiveChange?.(voiceActive);
@@ -161,16 +198,20 @@ export function AssistantPanel({
   }
 
   function closeAssistant() {
+    cancelWork();
     changeView("collapsed");
   }
 
   function startVoice() {
+    cancelWork();
     setVoiceActive(true);
   }
 
   function returnToText(captions: AssistantVoiceCaption[]) {
+    cancelWork();
     if (captions.length > 0) setMessages((current) => [...current, ...captions]);
     setVoiceActive(false);
+    void actions.reload();
   }
 
   useEffect(() => {
@@ -234,9 +275,7 @@ export function AssistantPanel({
       const history = Array.isArray(body.messages) ? body.messages as Message[] : [];
       setMessages((current) => mergeMessageHistory(history, current));
       setDismissed(Array.isArray(body.dismissedPromptKeys) ? body.dismissedPromptKeys as string[] : []);
-      if (hydrationGeneration === documentHydrationGeneration.current) {
-        setProposals(Array.isArray(body.formPatchProposal) ? body.formPatchProposal as FormFieldProposal[] : []);
-      }
+      if (hydrationGeneration === documentHydrationGeneration.current && body.formPatchNotice) setExtractionMessage(String(body.formPatchNotice));
     }).catch((error) => active && setPanelError(error instanceof Error ? error.message : "Assistant history could not be loaded.")).finally(() => active && setHistoryLoading(false));
     return () => { active = false; };
   }, []);
@@ -261,28 +300,24 @@ export function AssistantPanel({
   const suggestions = pageSuggestions[pathname] ?? ["What should I do next?", "Explain this page in plain language"];
 
   useEffect(() => {
-    const timer = window.setTimeout(() => consumeQueuedPortalTarget(), 80);
-    return () => window.clearTimeout(timer);
-  }, [pathname]);
+    if (previousPathname.current === pathname) return;
+    previousPathname.current = pathname;
+    if (expectedNavigation.current === pathname) expectedNavigation.current = null;
+    else cancelWork();
+    void actions.reload();
+  }, [pathname, cancelWork, actions.reload]);
+  useEffect(() => () => { textRequestController.current?.abort(); }, []);
 
-  useEffect(() => {
-    textRequestController.current?.abort();
-    textRequestGeneration.current += 1;
-    textRequestController.current = null;
-  }, [pathname, voiceContextVersion]);
-
-  async function handlePortalAction(action: PortalAction): Promise<PortalActionResult> {
-    const result = await executePortalAction(action, {
-      pathname,
-      navigate: (route) => router.push(route),
-      refresh: () => router.refresh(),
-      pendingAction: pendingPortalAction,
-      setPendingAction: setPendingPortalAction,
-      employmentId: snapshot.employments[0]?.employmentKey,
-    });
-    if (result.status === "failed") setPanelError(result.message);
-    return result;
-  }
+  const handleUiRequest = useCallback(async (request: UiRequest, signal: AbortSignal) => {
+    try {
+      return await executePortalAction(request, {
+        current: () => browserState.current, signal,
+        navigate: (route) => { expectedNavigation.current = route; router.push(route); },
+        openUtility: (panel) => onOpenUtility?.(panel) ?? false,
+        openDocument: () => { changeView("docked"); setDocumentOpen(true); },
+      });
+    } finally { expectedNavigation.current = null; }
+  }, [changeView, onOpenUtility, router]);
 
   async function persistState(body: Record<string, string>) {
     const response = await fetch("/api/assistant", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -303,7 +338,7 @@ export function AssistantPanel({
 
   async function sendMessage(message: string, signal?: AbortSignal): Promise<{ text: string } | null> {
     const trimmed = message.trim();
-    if (!trimmed || pending || signal?.aborted) return null;
+    if (!trimmed || signal?.aborted) return null;
     setInput(""); setPending(true); setPanelError("");
     if (!voiceActive) openAssistant();
     setMessages((current) => [...current, { role: "member", text: trimmed }]);
@@ -311,6 +346,7 @@ export function AssistantPanel({
     const generation = ++textRequestGeneration.current;
     textRequestController.current?.abort();
     textRequestController.current = controller;
+    expectedNavigation.current = null;
     const abortFromCaller = () => controller.abort();
     const clearPendingOnAbort = () => {
       if (generation === textRequestGeneration.current) setPending(false);
@@ -323,13 +359,22 @@ export function AssistantPanel({
       const result = await readJson(response);
       if (controller.signal.aborted || generation !== textRequestGeneration.current) return null;
       if (!response.ok) throw new Error(String(result.error ?? "Assistant response could not be loaded."));
-      const text = String(result.text ?? "I could not explain that yet.");
-      setMessages((current) => [...current, { role: "assistant", text, source: result.usedFallback ? "fallback" : "openai", actions: Array.isArray(result.actions) ? result.actions as AssistantActionProposal[] : [] }]);
-      const portalActions = Array.isArray(result.portalActions) ? result.portalActions as PortalAction[] : [];
-      for (const action of portalActions) {
-        if (controller.signal.aborted || generation !== textRequestGeneration.current) return null;
-        await handlePortalAction(action);
+      const final = await finishTextContinuation(result as unknown as AssistantReply, handleUiRequest, controller.signal,
+        (results) => results.forEach((item) => actions.acceptResult(item, true)));
+      if (controller.signal.aborted || generation !== textRequestGeneration.current) return null;
+      const text = final.text || "Review the action results before continuing.";
+      setMessages((current) => [...current, { role: "assistant", text, source: final.usedFallback ? "fallback" : "openai", actions: final.actions }]);
+      // Narrow offline navigation still uses the same observer, without provider
+      // continuation. It cannot mutate records or claim unobserved completion.
+      for (const action of final.portalActions ?? []) {
+        if (action.name !== "navigate_to" || controller.signal.aborted) continue;
+        const callId = crypto.randomUUID();
+        const observed = await handleUiRequest({ callId, action, contextVersion: "offline",
+          expiresAt: new Date(Date.now() + 8000).toISOString() }, controller.signal);
+        actions.acceptResult({ callId, contextVersion: "offline", status: observed.status,
+          message: observed.status === "completed" ? "Requested page observed in the browser." : "The requested page was not observed." });
       }
+      await actions.reload();
       return { text };
     } catch (error) {
       if (!controller.signal.aborted && generation === textRequestGeneration.current) setPanelError(error instanceof Error ? error.message : "Assistant unavailable. Use the visible page actions to continue.");
@@ -344,39 +389,15 @@ export function AssistantPanel({
     }
   }
 
-  async function resolvePendingPortalAction(confirm: boolean) {
-    const result = await handlePortalAction({ name: confirm ? "confirm_pending_action" : "cancel_pending_action", arguments: {} });
-    setMessages((current) => [...current, { role: "assistant", text: result.message, source: "fallback" }]);
-  }
-
   async function decideAction(action: AssistantActionProposal, decision: "CONFIRMED" | "REJECTED") {
     const proposalState = { kind: "PROPOSAL_DECISION", proposalKey: `${action.type}-${action.label}`.slice(0, 120), decision };
     if (decision === "REJECTED") {
       try { await persistState(proposalState); } catch { setPanelError("The proposal decision could not be recorded. No account data changed."); return; }
-    } else if (action.type === "NAVIGATE" && action.payload.href?.startsWith("/")) {
+    } else if (action.type === "NAVIGATE" && Object.values(destinationRoutes).includes(action.payload.href ?? "")) {
       try { await persistState(proposalState); } catch { setPanelError("The proposal decision could not be recorded. No account data changed."); return; }
-      router.push(action.payload.href);
-    } else if (action.type === "APPLY_DEMO_CORRECTION") {
-      const isEmployment = action.payload.correction === "EMPLOYMENT_EXIT_DATE" && action.payload.employmentId?.startsWith("employment:");
-      const isBank = action.payload.correction === "BANK_NAME";
-      if (!isEmployment && !isBank) { setPanelError("This proposal is not an allowed demo correction. No account data changed."); return; }
-      setPending(true); setPanelError("");
-      try {
-        const response = await fetch(isEmployment ? "/api/scenarios/employment" : "/api/scenarios/bank", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify(isEmployment
-            ? { command: "SIMULATE_EMPLOYER_EXIT_DATE", employmentId: action.payload.employmentId }
-            : { command: "SIMULATE_BANK_CORRECTION" }),
-        });
-        const result = await readJson(response);
-        if (!response.ok) throw new Error(String(result.error ?? "The confirmed simulation could not be completed."));
-        await persistState(proposalState);
-        setMessages((current) => [...current, { role: "assistant", text: "Confirmed simulation completed through the same page workflow. Readiness has been recalculated.", source: "fallback" }]);
-        router.refresh();
-      } catch (error) { setPanelError(error instanceof Error ? error.message : "The confirmed simulation could not be completed. The proposal remains available."); return; }
-      finally { setPending(false); }
+      router.push(action.payload.href!);
     } else {
-      setPanelError("This proposal is not available in the current journey. No account data changed.");
+      setPanelError("This legacy card has no persisted confirmation boundary. Ask for a fresh exact proposal; no account data changed.");
       return;
     }
     setMessages((current) => current.map((message) => ({ ...message, actions: message.actions?.filter((candidate) => candidate !== action) })));
@@ -389,19 +410,16 @@ export function AssistantPanel({
     if (!syntheticAccepted) { setExtractionMessage("Confirm that this file contains synthetic demo data only."); return; }
     documentHydrationGeneration.current += 1;
     const generation = ++extractionGeneration.current;
-    setExtractionPending(true); setExtractionMessage(""); setProposals([]);
+    setExtractionPending(true); setExtractionMessage(""); setProposals([]); setDocumentSourceId(null);
+    documentPrepareEvent.current = null;
     const data = new FormData(); data.set("document", file); data.set("documentKind", documentKind); data.set("syntheticDisclosureAccepted", "true");
     try {
       const response = await fetch("/api/assistant/extract", { method: "POST", body: data });
       const result = await readJson(response);
-      if (generation !== extractionGeneration.current) {
-        if (response.ok && Array.isArray(result.proposals)) {
-          try { await persistState({ kind: "DISMISS_FORM_PATCH" }); }
-          catch { setPanelError("The cancelled proposal may still appear after a refresh."); }
-        }
-        return;
-      }
+      if (generation !== extractionGeneration.current) return;
       if (!response.ok) throw new Error(String(result.error ?? "The synthetic document could not be reviewed."));
+      if (typeof result.documentProposalId !== "string") throw new Error("No stored document source was returned. Select the document again.");
+      setDocumentSourceId(result.documentProposalId);
       setProposals(Array.isArray(result.proposals) ? result.proposals as FormFieldProposal[] : []); setPatchScope("SECTION"); setExtractionMessage(String(result.disclosure ?? "Proposals are ready for review."));
     } catch (error) {
       if (generation === extractionGeneration.current) setExtractionMessage(error instanceof Error ? error.message : "The synthetic document could not be reviewed.");
@@ -410,12 +428,15 @@ export function AssistantPanel({
     }
   }
 
-  const scopedProposals = patchScope === "FIELD" ? proposals.slice(0, 1) : proposals;
+  const scopedProposals = patchScope === "FIELD" ? proposals.slice(0, 1)
+    : patchScope === "SECTION" ? proposals.filter((proposal) => proposal.section === proposals[0]?.section) : proposals;
   function clearDocumentReview(message = "") {
     documentHydrationGeneration.current += 1;
     setDocumentKind("BANK_STATEMENT");
     setSyntheticAccepted(false);
     setProposals([]);
+    setDocumentSourceId(null);
+    documentPrepareEvent.current = null;
     setPatchScope("SECTION");
     setExtractionMessage(message);
     setExtractionPending(false);
@@ -424,27 +445,35 @@ export function AssistantPanel({
   }
 
   function cancelDocumentReview() {
-    const shouldDismissProposal = proposals.length > 0 || extractionPending;
     extractionGeneration.current += 1;
     clearDocumentReview();
-    if (shouldDismissProposal) {
-      void persistState({ kind: "DISMISS_FORM_PATCH" }).catch(() => setPanelError("The proposal was hidden, but that choice may not survive a refresh."));
-    }
   }
 
   async function applyPatch() {
-    if (pathname !== "/onboarding" || snapshot.persona !== "NEW_MEMBER" || extractionPending) return;
+    if (pathname !== "/onboarding" || snapshot.persona !== "NEW_MEMBER" || extractionPending || !documentSourceId) return;
+    cancelWork();
     setPatchPending(true); setExtractionMessage("");
     try {
-      const response = await fetch("/api/assistant/form-patch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ processKey: "ONBOARDING", scope: patchScope, section: patchScope === "SECTION" ? scopedProposals[0]?.section : undefined, proposals: scopedProposals, confirmed: true, demoDisclosureAccepted: true }) });
-      const result = await readJson(response);
-      if (!response.ok) throw new Error(String(result.error ?? "The proposed values could not be applied."));
-      const values = Object.fromEntries(scopedProposals.map((proposal) => [proposal.field, ["epfMember", "epsMember"].includes(proposal.field) ? proposal.proposedValue === "true" : proposal.proposedValue])) as AssistantPatchAppliedEventDetail["values"];
-      window.dispatchEvent(new CustomEvent<AssistantPatchAppliedEventDetail>(ASSISTANT_PATCH_APPLIED_EVENT, { detail: { values } }));
-      clearDocumentReview();
-      setMessages((current) => [...current, { role: "assistant", text: String(result.message ?? "The confirmed draft changes were applied."), source: "fallback" }]);
-      router.refresh();
-    } catch (error) { setExtractionMessage(error instanceof Error ? error.message : "The proposed values could not be applied."); } finally { setPatchPending(false); }
+      const fields = scopedProposals.map((proposal) => proposal.field);
+      const key = JSON.stringify([documentSourceId, fields]);
+      let event = documentPrepareEvent.current;
+      if (!event || event.key !== key) {
+        event = { key, requestKey: crypto.randomUUID(), callId: crypto.randomUUID() };
+        documentPrepareEvent.current = event;
+      }
+      rememberCall(event.callId);
+      const result = toolResultSchema.parse(await assistantRequest("/api/assistant/onboarding", {
+        requestKey: event.requestKey, callId: event.callId, route: pathname, documentProposalId: documentSourceId, fields,
+      }));
+      actions.acceptResult(result, true);
+      setExtractionMessage(result.message);
+      if (result.status === "confirmation_required") setProposals([]);
+      await actions.reload();
+    } catch (error) {
+      setExtractionMessage(error instanceof Error ? error.message : "The proposed values could not be prepared.");
+      if (documentPrepareEvent.current) actions.acceptResult(await recoverCall(documentPrepareEvent.current.callId));
+      await actions.reload();
+    } finally { setPatchPending(false); }
   }
 
   const definition = guidance ? processDefinitions[guidance.processKey] : null;
@@ -474,22 +503,25 @@ export function AssistantPanel({
           <div className="guidance-controls"><button className="secondary-action" disabled={guidance.position === 0} onClick={() => setGuidance({ ...guidance, position: guidance.position - 1 })} type="button"><ChevronLeft aria-hidden="true" size={17} /> Previous question</button><button className="primary-action" disabled={guidance.position >= maxPosition} onClick={() => setGuidance({ ...guidance, position: guidance.position + 1 })} type="button">Next question <ChevronRight aria-hidden="true" size={17} /></button></div>
         </section> : null}
         {!voiceActive ? <div className="assistant-suggestions" aria-label="Suggested questions">{suggestions.map((suggestion) => <button disabled={pending} key={suggestion} onClick={() => sendMessage(suggestion)} type="button">{suggestion}</button>)}</div> : null}
-        {voiceActive ? <AssistantVoiceControl active contextVersion={voiceContextVersion} documentOpen={documentOpen} onExit={() => setVoiceActive(false)} onReturnToText={returnToText} onToggleDocument={() => setDocumentOpen((current) => !current)} onToolCall={handlePortalAction} pendingAction={pendingPortalAction} onConfirmPending={() => resolvePendingPortalAction(true)} onCancelPending={() => resolvePendingPortalAction(false)} route={pathname} /> : null}
+        {voiceActive ? <AssistantVoiceControl active contextVersion={voiceContextVersion} documentOpen={documentOpen} onExit={() => { cancelWork(); setVoiceActive(false); }} onReturnToText={returnToText} onToggleDocument={() => setDocumentOpen((current) => !current)} onUiRequest={handleUiRequest} onToolResult={handleVoiceResult} cancellationVersion={cancellationVersion} route={pathname} /> : null}
         {!voiceActive ? <div className="assistant-thread" aria-busy={pending || historyLoading} aria-label="EPF Sahayak conversation" aria-live="polite" role="region">
           {visiblePrompt && !suppressPrompt ? <ProactivePrompt prompt={visiblePrompt} onDismiss={() => dismissPrompt(visiblePrompt)} onChooseGuidance={(mode) => chooseGuidance(visiblePrompt, mode)} /> : null}
           {historyLoading ? <div className="assistant-empty"><Sparkles aria-hidden="true" size={18} /> Loading this run’s conversation…</div> : null}
           {!historyLoading && messages.length === 0 ? <div className="assistant-empty">Ask about this page, a status, or the safest next action.</div> : null}
-          {messages.map((message, index) => <div key={`${message.role}-${index}-${message.text}`}><AssistantMessage role={message.role} source={message.source} text={message.text} />{message.actions?.map((action) => <div className="assistant-action-card" key={`${action.type}-${action.label}`}><strong>{action.label}</strong><p>Nothing changes until you confirm.</p><div><button className="primary-action" onClick={() => decideAction(action, "CONFIRMED")} type="button">Confirm action</button><button className="secondary-action" onClick={() => decideAction(action, "REJECTED")} type="button">Keep unchanged</button></div></div>)}</div>)}
-          {pendingPortalAction && !voiceActive ? <div className="assistant-action-card" role="status"><strong>{describePortalAction(pendingPortalAction)}</strong><p>Nothing changes until you confirm.</p><div><button className="primary-action" disabled={pending} onClick={() => resolvePendingPortalAction(true)} type="button">Confirm action</button><button className="secondary-action" disabled={pending} onClick={() => resolvePendingPortalAction(false)} type="button">Cancel</button></div></div> : null}
+          {messages.map((message, index) => <div key={`${message.role}-${index}-${message.text}`}><AssistantMessage role={message.role} source={message.source} text={message.text} />{message.actions?.map((action) => <div className="assistant-action-card" key={`${action.type}-${action.label}`}><strong>{action.label}</strong>{action.type === "NAVIGATE" ? <div><button className="primary-action" onClick={() => decideAction(action, "CONFIRMED")} type="button">Open page</button><button className="secondary-action" onClick={() => decideAction(action, "REJECTED")} type="button">Dismiss</button></div> : <p>Legacy proposal unavailable. Ask for a fresh persisted review.</p>}</div>)}</div>)}
+          
           {pending ? <div className="assistant-empty"><Sparkles aria-hidden="true" size={18} /> Checking the masked demo record…</div> : null}
         </div> : null}
+        <AssistantActionProgress results={actions.progress} refreshStatus={actions.refreshStatus} />
+        {actions.proposal ? <PersistedActionReview key={actions.proposal.proposalId + ":" + actions.proposal.payloadHash} proposal={actions.proposal} busy={actions.busy} acknowledged={actions.acknowledged} onDisplayed={actions.markDisplayed} onDecision={actions.decide} /> : null}
+        {actions.error ? <p className="assistant-error" role="alert">{actions.error}</p> : null}
         {panelError ? <p className="assistant-error" role="alert">{panelError}</p> : null}
         {documentOpen ? <section aria-label="Synthetic document review" className="document-assist" id="assistant-document-review"><header className="document-assist-header"><FileSearch aria-hidden="true" size={18} /><span><strong>Review a synthetic document</strong><small>Produces proposals only</small></span><button className="text-action" onClick={cancelDocumentReview} type="button">Cancel review</button></header><form onSubmit={extractDocument}>
           <label>Document type<select value={documentKind} onChange={(event) => { documentHydrationGeneration.current += 1; setDocumentKind(event.target.value); }}><option value="IDENTITY_RETURN">Simulated identity return</option><option value="JOINING_LETTER">Synthetic joining letter</option><option value="PAN_CARD">Synthetic PAN card</option><option value="BANK_STATEMENT">Synthetic bank statement</option></select></label>
           <label>Choose PDF, JPEG, or PNG (max 5 MB)<input ref={fileRef} accept="application/pdf,image/jpeg,image/png" onChange={() => { documentHydrationGeneration.current += 1; }} type="file" /></label>
           <label className="synthetic-confirm"><input checked={syntheticAccepted} onChange={(event) => { documentHydrationGeneration.current += 1; setSyntheticAccepted(event.target.checked); }} type="checkbox" /><span>This file is entirely synthetic and contains no real identity, bank, or government data.</span></label>
           <button className="secondary-action" disabled={extractionPending || !syntheticAccepted} type="submit">{extractionPending ? "Reviewing…" : "Create review proposals"}</button>
-        </form>{extractionMessage ? <p className="extraction-feedback" role="status">{extractionMessage}</p> : null}{proposals.length > 0 ? pathname === "/onboarding" && snapshot.persona === "NEW_MEMBER" ? <><div className="patch-scope" aria-label="Apply scope"><button aria-pressed={patchScope === "FIELD"} disabled={extractionPending} onClick={() => setPatchScope("FIELD")} type="button">One field</button><button aria-pressed={patchScope === "SECTION"} disabled={extractionPending} onClick={() => setPatchScope("SECTION")} type="button">This section</button><button aria-pressed={patchScope === "WHOLE_FORM"} disabled={extractionPending} onClick={() => setPatchScope("WHOLE_FORM")} type="button">All extracted</button></div><FormPatchReview proposals={scopedProposals} scope={patchScope} pending={patchPending || extractionPending} onConfirm={applyPatch} onCancel={cancelDocumentReview} /></> : <section aria-label="Review extracted document" className="document-review-only"><div className="patch-list">{proposals.map((proposal) => <article className="patch-row" key={proposal.field}><div className="patch-heading"><strong>{proposal.label}</strong><span data-validation={proposal.validation}>{proposal.validation === "VALID" ? "Reviewed" : "Check value"}</span></div><dl><div><dt>Existing</dt><dd>{proposal.existingValue || "Not saved"}</dd></div><div><dt>Proposed</dt><dd>{proposal.sensitive ? "•••• " : ""}{proposal.proposedValue}</dd></div><div><dt>Source</dt><dd>{proposal.source}</dd></div><div><dt>Confidence</dt><dd>{Math.round(proposal.confidence * 100)}%</dd></div></dl></article>)}</div><p className="document-review-guidance">I can review this synthetic document here. Open new-member setup before applying extracted values to a form.</p></section> : null}</section> : null}
+        </form>{extractionMessage ? <p className="extraction-feedback" role="status">{extractionMessage}</p> : null}{proposals.length > 0 ? pathname === "/onboarding" && snapshot.persona === "NEW_MEMBER" ? <><div className="patch-scope" aria-label="Apply scope"><button aria-pressed={patchScope === "FIELD"} disabled={extractionPending} onClick={() => setPatchScope("FIELD")} type="button">One field</button><button aria-pressed={patchScope === "SECTION"} disabled={extractionPending} onClick={() => setPatchScope("SECTION")} type="button">This section</button><button aria-pressed={patchScope === "WHOLE_FORM"} disabled={extractionPending} onClick={() => setPatchScope("WHOLE_FORM")} type="button">All extracted</button></div><FormPatchReview proposals={scopedProposals} scope={patchScope} prepareOnly pending={patchPending || extractionPending} onConfirm={applyPatch} onCancel={cancelDocumentReview} /></> : <section aria-label="Review extracted document" className="document-review-only"><div className="patch-list">{proposals.map((proposal) => <article className="patch-row" key={proposal.field}><div className="patch-heading"><strong>{proposal.label}</strong><span data-validation={proposal.validation}>{proposal.validation === "VALID" ? "Reviewed" : "Check value"}</span></div><dl><div><dt>Existing</dt><dd>{proposal.existingValue || "Not saved"}</dd></div><div><dt>Proposed</dt><dd>{proposal.sensitive ? "•••• " : ""}{proposal.proposedValue}</dd></div><div><dt>Source</dt><dd>{proposal.source}</dd></div><div><dt>Confidence</dt><dd>{Math.round(proposal.confidence * 100)}%</dd></div></dl></article>)}</div><p className="document-review-guidance">I can review this synthetic document here. Open new-member setup before applying extracted values to a form.</p></section> : null}</section> : null}
         </div>
         {!voiceActive ? <form className="assistant-form" onSubmit={(event) => { event.preventDefault(); sendMessage(input); }}>
           <label htmlFor="assistant-message">Ask EPF Sahayak</label>

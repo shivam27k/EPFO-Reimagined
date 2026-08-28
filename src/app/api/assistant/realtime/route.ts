@@ -76,7 +76,7 @@ export async function GET(request: Request) {
       throw new Error("Realtime instructions are unavailable.");
     }
     return Response.json(
-      { instructions: config.instructions },
+      { instructions: config.instructions, contextSchemaVersion: 1 },
       { headers: { "cache-control": "no-store" } },
     );
   } catch (error) {
@@ -99,7 +99,7 @@ export async function PUT(request: Request) {
       throw new Error("Realtime instructions are unavailable.");
     }
     return Response.json(
-      { instructions: config.instructions },
+      { instructions: config.instructions, contextSchemaVersion: 1 },
       { headers: { "cache-control": "no-store" } },
     );
   } catch (error) {

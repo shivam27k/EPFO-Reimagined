@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { desc, eq } from "drizzle-orm";
 import { cache } from "react";
 
@@ -74,7 +75,7 @@ function chooseNextAction(
   return { label: "Review contribution history", href: "/passbook" };
 }
 
-export async function getMemberSnapshot(demoRunId: string): Promise<MemberSnapshot> {
+export async function getMemberSnapshotWithVersion(demoRunId: string): Promise<{ snapshot: MemberSnapshot; contextVersion: string }> {
   await ensureDatabaseReady();
   const db = getDb();
 
@@ -254,10 +255,23 @@ export async function getMemberSnapshot(demoRunId: string): Promise<MemberSnapsh
     findings,
   };
 
-  return {
+  const snapshot: MemberSnapshot = {
     ...snapshotWithoutAction,
     nextAction: chooseNextAction(snapshotWithoutAction),
   };
+  // Version the authoritative records, not their masked presentation: changes to
+  // private values must invalidate context even when the visible suffix is unchanged.
+  // Sorting each collection makes the hash independent of equal-date row ordering.
+  const recordSets = [runRows, profileRows, kycRows, employmentRows, contributionRows,
+    claimRows, eventRows, scenarioRows, requestRows, simulationRows]
+    .map((rows) => rows.map((row) => JSON.stringify(row)).sort());
+  const contextVersion = createHash("sha256")
+    .update(JSON.stringify({ demoRunId, recordSets })).digest("hex");
+  return { snapshot, contextVersion };
+}
+
+export async function getMemberSnapshot(demoRunId: string): Promise<MemberSnapshot> {
+  return (await getMemberSnapshotWithVersion(demoRunId)).snapshot;
 }
 
 export const getCachedMemberSnapshot = cache(getMemberSnapshot);

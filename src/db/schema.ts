@@ -299,6 +299,94 @@ export const conversationMessages = sqliteTable(
   ],
 );
 
+// Provider continuations are opaque server-only state, never accepted from clients.
+export const assistantContinuations = sqliteTable("assistant_continuations", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => demoRuns.id, { onDelete: "cascade" }),
+  turnId: text("turn_id").notNull(),
+  payloadJson: text("payload_json").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  state: text("state", { enum: ["pending", "consumed", "expired"] }).notNull().default("pending"),
+  revision: integer("revision").notNull().default(0),
+  consumedAt: text("consumed_at"),
+  createdAt: text("created_at").notNull(),
+}, (table) => [index("assistant_continuations_run_idx").on(table.runId)]);
+
+export const assistantTurns = sqliteTable("assistant_turns", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => demoRuns.id, { onDelete: "cascade" }),
+  requestKey: text("request_key").notNull(),
+  requestHash: text("request_hash").notNull(),
+  mode: text("mode", { enum: ["text", "voice", "ui"] }).notNull(),
+  route: text("route").notNull(),
+  textMasked: text("text_masked").notNull(),
+  sourceHashesJson: text("source_hashes_json").notNull(),
+  syntheticDisclosure: integer("synthetic_disclosure", { mode: "boolean" }).notNull(),
+  proposalId: text("proposal_id"),
+  proposalHash: text("proposal_hash"),
+  decision: text("decision", { enum: ["confirm", "cancel"] }),
+  calls: integer("calls").notNull().default(0),
+  activeMs: integer("active_ms").notNull().default(0),
+  readRetried: integer("read_retried", { mode: "boolean" }).notNull().default(false),
+  activeCallId: text("active_call_id"),
+  activeSince: text("active_since"),
+  createdAt: text("created_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+}, (table) => [uniqueIndex("assistant_turns_run_request_idx").on(table.runId, table.requestKey)]);
+
+export const assistantProposals = sqliteTable("assistant_proposals", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => demoRuns.id, { onDelete: "cascade" }),
+  sourceTurnId: text("source_turn_id").notNull(),
+  callId: text("call_id").notNull(),
+  payloadJson: text("payload_json").notNull(),
+  payloadHash: text("payload_hash").notNull(),
+  stateVersion: text("state_version").notNull(),
+  status: text("status", { enum: ["pending", "committed", "cancelled", "expired", "stale", "uncertain"] }).notNull(),
+  createdAt: text("created_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  displayedAt: text("displayed_at"),
+  consumedAt: text("consumed_at"),
+}, (table) => [
+  uniqueIndex("assistant_proposals_run_call_idx").on(table.runId, table.callId),
+  index("assistant_proposals_pending_idx").on(table.runId, table.status),
+]);
+
+export const assistantReceipts = sqliteTable("assistant_receipts", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => demoRuns.id, { onDelete: "cascade" }),
+  proposalId: text("proposal_id").notNull(),
+  callId: text("call_id").notNull(),
+  decisionTurnId: text("decision_turn_id").notNull(),
+  payloadHash: text("payload_hash").notNull(),
+  resultJson: text("result_json").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("assistant_receipts_run_proposal_idx").on(table.runId, table.proposalId),
+  uniqueIndex("assistant_receipts_run_call_idx").on(table.runId, table.callId),
+]);
+
+export const assistantToolCalls = sqliteTable("assistant_tool_calls", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => demoRuns.id, { onDelete: "cascade" }),
+  turnId: text("turn_id").notNull(),
+  callId: text("call_id").notNull(),
+  requestHash: text("request_hash").notNull(),
+  resultJson: text("result_json"),
+  createdAt: text("created_at").notNull(),
+  completedAt: text("completed_at"),
+}, (table) => [uniqueIndex("assistant_tool_calls_run_call_idx").on(table.runId, table.callId)]);
+
+export const assistantDocumentSources = sqliteTable("assistant_document_sources", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => demoRuns.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  payloadJson: text("payload_json").notNull(),
+  payloadHash: text("payload_hash").notNull(),
+  createdAt: text("created_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+}, (table) => [index("assistant_document_sources_run_idx").on(table.runId)]);
+
 export const demoUsersRelations = relations(demoUsers, ({ many }) => ({
   runs: many(demoRuns),
   sessions: many(sessions),

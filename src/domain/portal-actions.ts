@@ -2,7 +2,8 @@ import { z } from "zod";
 
 export const portalDestinations = [
   "overview", "profile", "employment", "contributions", "claims", "services",
-  "transfers", "nomination", "help",
+  "transfers", "nomination", "help", "contact_details", "basic_details", "uan_card",
+  "security", "annexure_k", "pmvbry", "onboarding",
 ] as const;
 
 export const portalWorkflows = [
@@ -26,7 +27,8 @@ export const demoActions = [
 ] as const;
 
 const emptySchema = z.object({}).strict();
-const actionSchemas = {
+// Leaf contracts: the shared registry imports these; this module must not import it back.
+export const portalActionSchemas = {
   navigate_to: z.object({ destination: z.enum(portalDestinations) }).strict(),
   reveal_section: z.object({ target: z.enum(portalTargets) }).strict(),
   focus_control: z.object({ target: z.enum(portalTargets) }).strict(),
@@ -36,6 +38,8 @@ const actionSchemas = {
   confirm_pending_action: emptySchema,
   cancel_pending_action: emptySchema,
 } as const;
+
+const actionSchemas = portalActionSchemas;
 
 export type PortalToolName = keyof typeof actionSchemas;
 export type PortalAction = {
@@ -53,6 +57,8 @@ export const destinationRoutes: Record<(typeof portalDestinations)[number], stri
   overview: "/overview", profile: "/profile", employment: "/employment",
   contributions: "/passbook", claims: "/claims", services: "/services",
   transfers: "/transfers", nomination: "/nomination", help: "/help",
+  contact_details: "/contact-details", basic_details: "/basic-details", uan_card: "/uan-card",
+  security: "/security", annexure_k: "/transfers/annexure-k", pmvbry: "/pmvbry", onboarding: "/onboarding",
 };
 
 export const workflowRoutes: Record<(typeof portalWorkflows)[number], { route: string; target?: (typeof portalTargets)[number] }> = {
@@ -89,28 +95,3 @@ export function isMutatingPortalAction(action: PortalAction): boolean {
   return action.name === "propose_demo_action" || action.name === "confirm_pending_action";
 }
 
-const tool = (name: PortalToolName, description: string, properties: Record<string, unknown>, required: string[] = []) => ({
-  type: "function" as const,
-  name,
-  description,
-  strict: true,
-  parameters: { type: "object", properties, required, additionalProperties: false },
-});
-
-export const portalToolDefinitions = [
-  tool("navigate_to", "Navigate to a main member portal page. Use this whenever the user asks to open or go to a page.", { destination: { type: "string", enum: portalDestinations } }, ["destination"]),
-  tool("reveal_section", "Open and scroll to a known section on the current or related page.", { target: { type: "string", enum: portalTargets } }, ["target"]),
-  tool("focus_control", "Focus a known portal control so the member can continue themselves.", { target: { type: "string", enum: portalTargets } }, ["target"]),
-  tool("scroll_page", "Scroll the current page to the top, upward, downward, or to the bottom. Use this for explicit page-scrolling requests.", { destination: { type: "string", enum: portalScrollDestinations } }, ["destination"]),
-  tool("start_workflow", "Open the safe entry page for a member workflow. This does not submit anything.", { workflow: { type: "string", enum: portalWorkflows } }, ["workflow"]),
-  tool("propose_demo_action", "Propose an allowlisted state-changing demo simulation. This only creates a confirmation request.", { action: { type: "string", enum: demoActions } }, ["action"]),
-  tool("confirm_pending_action", "Confirm the one pending demo action after the member explicitly says yes.", {}),
-  tool("cancel_pending_action", "Cancel the one pending demo action after the member says no or cancel.", {}),
-];
-
-export const realtimePortalToolDefinitions = portalToolDefinitions.map(({ type, name, description, parameters }) => ({
-  type,
-  name,
-  description,
-  parameters,
-}));

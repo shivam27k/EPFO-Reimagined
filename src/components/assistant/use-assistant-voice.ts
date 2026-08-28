@@ -3,7 +3,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { parsePortalToolCall, type PortalAction, type PortalActionResult } from "@/domain/portal-actions";
+import type { ToolResult } from "@/domain/assistant-tools";
+import type { ObserveUi } from "./assistant-transport";
+import { VoiceToolSession } from "./voice-tool-session";
 import { containsForbiddenScript } from "./assistant-language";
 import { captureVisibleScreenText, visibleScreenFingerprint } from "./visible-screen-context";
 
@@ -15,6 +17,13 @@ const VOICE_RECEIVED_NOTICE = "Voice received. आवाज़ मिली।";
 const SETUP_TIMEOUT_MS = 15_000;
 const IDLE_SESSION_MS = 10 * 60 * 1_000;
 const MAX_SESSION_MS = 30 * 60 * 1_000;
+const PREFERRED_MICROPHONE_CONSTRAINTS: MediaStreamConstraints = {
+  audio: {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  },
+};
 
 type CaptionRole = AssistantVoiceCaption["role"];
 
@@ -26,6 +35,8 @@ type RealtimeEvent = {
   previous_item_id?: unknown;
   item?: unknown;
   response?: unknown;
+  response_id?: unknown;
+  error?: unknown;
 };
 
 type CaptionItem = {
@@ -61,12 +72,25 @@ function isPermissionDenied(error: unknown): boolean {
   return error instanceof DOMException && error.name === "NotAllowedError";
 }
 
-function isCompleteRealtimeInstructions(value: unknown): value is string {
+function isUnsupportedMicrophoneConstraint(error: unknown): boolean {
+  return error instanceof DOMException
+    && (error.name === "OverconstrainedError" || error.name === "NotSupportedError");
+}
+
+async function captureMicrophone(): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia(PREFERRED_MICROPHONE_CONSTRAINTS);
+  } catch (error) {
+    if (!isUnsupportedMicrophoneConstraint(error)) throw error;
+    return navigator.mediaDevices.getUserMedia({ audio: true });
+  }
+}
+
+function isCompleteRealtimeInstructions(value: unknown, schemaVersion: unknown): value is string {
   return typeof value === "string"
+    && schemaVersion === 1
     && value.includes("Current masked portal context (synthetic data only):")
-    && /English or Hindi/i.test(value)
-    && /Never invent/i.test(value)
-    && /explicit confirmation/i.test(value);
+    && value.trim().length > 0;
 }
 
 function contextKey(route: string, contextVersion: string): string {
@@ -116,12 +140,16 @@ function orderCaptionItems(items: CaptionItem[]): CaptionItem[] {
 export function useAssistantVoice({
   active,
   contextVersion,
-  onToolCall,
+  onUiRequest,
+  onToolResult,
+  cancellationVersion = 0,
   route,
 }: {
   active: boolean;
   contextVersion: string;
-  onToolCall?: (action: PortalAction) => Promise<PortalActionResult>;
+  onUiRequest: ObserveUi;
+  onToolResult: (result: ToolResult, current?: boolean) => void;
+  cancellationVersion?: number;
   route: string;
 }) {
   const [state, setState] = useState<AssistantVoiceState>("IDLE");
@@ -147,9 +175,11 @@ export function useAssistantVoice({
   const setupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const totalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handledToolCallsRef = useRef(new Set<string>());
-  const onToolCallRef = useRef(onToolCall);
-  onToolCallRef.current = onToolCall;
+  const toolSessionRef = useRef<VoiceToolSession | null>(null);
+  const onUiRequestRef = useRef(onUiRequest);
+  const onToolResultRef = useRef(onToolResult);
+  onUiRequestRef.current = onUiRequest;
+  onToolResultRef.current = onToolResult;
 
   const clearSetupTimer = useCallback(() => {
     if (setupTimerRef.current) clearTimeout(setupTimerRef.current);
@@ -165,6 +195,7 @@ export function useAssistantVoice({
   }, [clearSetupTimer]);
 
   const closeResources = useCallback(() => {
+    toolSessionRef.current?.interrupt();
     const resources = resourcesRef.current;
     resourcesRef.current = null;
     if (!resources) return;
@@ -212,34 +243,6 @@ export function useAssistantVoice({
     return true;
   }, [resetIdleTimer]);
 
-  const handleToolCalls = useCallback(async (event: RealtimeEvent) => {
-    const response = typeof event.response === "object" && event.response !== null
-      ? event.response as Record<string, unknown>
-      : {};
-    const output = Array.isArray(response.output) ? response.output : [];
-    for (const candidate of output) {
-      if (typeof candidate !== "object" || candidate === null) continue;
-      const item = candidate as Record<string, unknown>;
-      if (item.type !== "function_call" || typeof item.call_id !== "string" || typeof item.name !== "string") continue;
-      if (handledToolCallsRef.current.has(item.call_id)) continue;
-      handledToolCallsRef.current.add(item.call_id);
-      let result: PortalActionResult;
-      try {
-        const action = parsePortalToolCall(item.name, typeof item.arguments === "string" ? item.arguments : "{}");
-        result = onToolCallRef.current
-          ? await onToolCallRef.current(action)
-          : { status: "unavailable", message: "Portal actions are not available in this session." };
-      } catch {
-        result = { status: "failed", message: "That portal action was not valid or supported." };
-      }
-      sendClientEvent({
-        type: "conversation.item.create",
-        item: { type: "function_call_output", call_id: item.call_id, output: JSON.stringify(result) },
-      });
-      sendClientEvent({ type: "response.create" });
-    }
-  }, [sendClientEvent]);
-
   const publishCaptions = useCallback(() => {
     const ordered = orderCaptionItems([...captionStoreRef.current.values()]);
     const latestMember = [...ordered].reverse().find(({ role }) => role === "member");
@@ -282,6 +285,11 @@ export function useAssistantVoice({
     resetIdleTimer();
 
     switch (event.type) {
+      case "response.created": {
+        const response = event.response as { id?: string } | undefined;
+        if (response?.id) toolSessionRef.current?.responseCreated(response.id);
+        break;
+      }
       case "conversation.item.created": {
         const id = idFromRealtimeItem(event.item);
         if (!id) return;
@@ -301,12 +309,14 @@ export function useAssistantVoice({
       case "conversation.item.input_audio_transcription.completed": {
         if (typeof event.transcript !== "string") return;
         const item = upsertCaptionItem(eventItemId(event, "member"), "member");
+        if (typeof event.item_id === "string") void toolSessionRef.current?.transcriptCompleted(event.item_id, event.transcript, routeRef.current);
         item.text = safeCaption(event.transcript, "member");
         item.completed = true;
         publishCaptions();
         break;
       }
       case "response.output_audio_transcript.delta": {
+        if (!toolSessionRef.current?.acceptsResponse(event.response_id)) return;
         if (typeof event.delta !== "string") return;
         const item = upsertCaptionItem(eventItemId(event, "assistant"), "assistant");
         if (!item.completed) item.text = appendCaption(item.text, event.delta, "assistant");
@@ -314,10 +324,12 @@ export function useAssistantVoice({
         break;
       }
       case "response.output_audio_transcript.done": {
+        if (!toolSessionRef.current?.acceptsResponse(event.response_id)) return;
         if (typeof event.transcript !== "string") return;
         const item = upsertCaptionItem(eventItemId(event, "assistant"), "assistant");
         item.text = safeCaption(event.transcript, "assistant");
         item.completed = true;
+        toolSessionRef.current?.saveCaption(item.id, item.text, false);
         publishCaptions();
         break;
       }
@@ -325,23 +337,32 @@ export function useAssistantVoice({
         setState("SPEAKING");
         break;
       case "output_audio_buffer.stopped":
+      case "output_audio_buffer.cleared":
         setState("LISTENING");
         break;
       case "response.done":
-        void handleToolCalls(event);
+        if (event.response && typeof event.response === "object") toolSessionRef.current?.responseDone(event.response as Record<string, unknown>);
         break;
       case "input_audio_buffer.speech_started":
+        if (outputItemRef.current) {
+          const previous = captionStoreRef.current.get(outputItemRef.current);
+          if (previous?.text) toolSessionRef.current?.saveCaption(previous.id, previous.text, true);
+        }
+        toolSessionRef.current?.speechStarted(typeof event.item_id === "string" ? event.item_id : "", routeRef.current);
         inputItemRef.current = typeof event.item_id === "string" ? event.item_id : "";
         setTranscript("");
         setState("LISTENING");
         break;
       case "error":
+        // Server VAD may already have interrupted this response before our
+        // targeted cancellation arrives. This is not a broken voice session.
+        if ((event.error as { code?: string } | undefined)?.code === "response_cancel_not_active") break;
         fail("Realtime voice needs attention. Retry voice or use text chat.");
         break;
       default:
         break;
     }
-  }, [eventItemId, fail, handleToolCalls, publishCaptions, resetIdleTimer, upsertCaptionItem]);
+  }, [eventItemId, fail, publishCaptions, resetIdleTimer, upsertCaptionItem]);
 
   const refreshContext = useCallback(async (nextRoute: string, nextContextKey: string) => {
     const resources = resourcesRef.current;
@@ -372,7 +393,7 @@ export function useAssistantVoice({
         || refreshSequence !== contextRefreshSequenceRef.current
         || generation !== generationRef.current
         || resourcesRef.current !== resources
-        || !isCompleteRealtimeInstructions(body.instructions)
+        || !isCompleteRealtimeInstructions(body.instructions, body.contextSchemaVersion)
       ) return;
 
       if (sendClientEvent({
@@ -415,7 +436,11 @@ export function useAssistantVoice({
       fallbackItemSequenceRef.current = 0;
       inputItemRef.current = "";
       outputItemRef.current = "";
-      handledToolCallsRef.current.clear();
+      toolSessionRef.current = new VoiceToolSession({
+        send: sendClientEvent,
+        observe: (request, signal) => onUiRequestRef.current(request, signal),
+        onResult: (result, current) => onToolResultRef.current(result, current),
+      });
       startTotalTimer();
     }
     setError("");
@@ -461,7 +486,7 @@ export function useAssistantVoice({
     };
 
     try {
-      microphone = await navigator.mediaDevices.getUserMedia({ audio: true });
+      microphone = await captureMicrophone();
       if (!activeRef.current || generation !== generationRef.current) {
         microphone.getTracks().forEach((track) => track.stop());
         return;
@@ -524,6 +549,7 @@ export function useAssistantVoice({
         clearSetupTimer();
         setState("LISTENING");
         resetIdleTimer();
+        if (reconnecting) void toolSessionRef.current?.recover();
         const visibleText = captureVisibleScreenText();
         const currentKey = contextKey(routeRef.current, contextVersionWithVisibleScreen(
           contextVersionRef.current,
@@ -574,6 +600,7 @@ export function useAssistantVoice({
     refreshContext,
     resetIdleTimer,
     startTotalTimer,
+    sendClientEvent,
   ]);
 
   connectRef.current = (reconnecting) => {
@@ -581,10 +608,9 @@ export function useAssistantVoice({
   };
 
   const stopSpeaking = useCallback(() => {
-    sendClientEvent({ type: "response.cancel" });
-    sendClientEvent({ type: "output_audio_buffer.clear" });
+    toolSessionRef.current?.interrupt();
     setState("LISTENING");
-  }, [sendClientEvent]);
+  }, []);
 
   const start = useCallback(() => {
     if (!active) return;
@@ -601,6 +627,10 @@ export function useAssistantVoice({
     setError("");
     setState("IDLE");
   }, [clearTimers, closeResources]);
+
+  useEffect(() => {
+    toolSessionRef.current?.interrupt();
+  }, [cancellationVersion]);
 
   useEffect(() => {
     routeRef.current = route;

@@ -89,6 +89,12 @@ export function OnboardingForm({ preflight, draft = null }: { preflight: Preflig
       const detail = (event as CustomEvent<AssistantPatchAppliedEventDetail>).detail;
       if (!detail?.values) return;
       setValues((current) => ({ ...current, ...detail.values }));
+      if (detail.maskedValues) {
+        setMaskedValues((current) => ({ ...current, ...detail.maskedValues }));
+        // Masked saved identifiers are not valid raw form input.
+        setValues((current) => ({ ...current, ...Object.fromEntries(Object.keys(detail.maskedValues!).map((key) => [key, ""])) }));
+      }
+      if (detail.receiptId) setDisclosureAccepted(true);
       setErrors((current) => {
         const next = { ...current };
         for (const key of Object.keys(detail.values) as OnboardingQuestionKey[]) delete next[key];

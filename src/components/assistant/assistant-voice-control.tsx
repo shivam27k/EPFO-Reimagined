@@ -3,8 +3,8 @@
 import { Keyboard, Mic, Paperclip, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 
-import { describePortalAction, type PortalAction, type PortalActionResult } from "@/domain/portal-actions";
-import type { PendingPortalAction } from "./portal-action-coordinator";
+import type { ToolResult } from "@/domain/assistant-tools";
+import type { ObserveUi } from "./assistant-transport";
 import { SafeBilingualText } from "./assistant-language";
 import { useAssistantVoice, type AssistantVoiceCaption, type AssistantVoiceState } from "./use-assistant-voice";
 
@@ -25,17 +25,16 @@ type AssistantVoiceControlProps = {
   route: string;
   documentOpen?: boolean;
   onToggleDocument?(): void;
-  onToolCall?(action: PortalAction): Promise<PortalActionResult>;
-  pendingAction?: PendingPortalAction | null;
-  onConfirmPending?(): void;
-  onCancelPending?(): void;
+  onUiRequest: ObserveUi;
+  onToolResult: (result: ToolResult, current?: boolean) => void;
+  cancellationVersion: number;
   onExit(): void;
   onReturnToText(captions: AssistantVoiceCaption[]): void;
 };
 
 export function AssistantVoiceControl(props: AssistantVoiceControlProps) {
-  const { active, contextVersion, documentOpen = false, onCancelPending, onConfirmPending, onExit, onReturnToText, onToggleDocument, onToolCall, pendingAction, route } = props;
-  const voice = useAssistantVoice({ active, contextVersion, onToolCall, route });
+  const { active, contextVersion, documentOpen = false, onExit, onReturnToText, onToggleDocument, onUiRequest, onToolResult, cancellationVersion, route } = props;
+  const voice = useAssistantVoice({ active, contextVersion, onUiRequest, onToolResult, cancellationVersion, route });
   const captionRef = useRef<HTMLDivElement>(null);
   const isSpeaking = voice.state === "SPEAKING";
   const isError = voice.state === "ERROR";
@@ -81,7 +80,6 @@ export function AssistantVoiceControl(props: AssistantVoiceControlProps) {
         {voice.answer ? <p><strong>EPF Sahayak:</strong> <SafeBilingualText text={voice.answer} /></p> : null}
         {voice.error ? <p role="alert">{voice.error}</p> : null}
       </div>
-      {pendingAction ? <div className="assistant-voice-pending" role="status"><strong>{describePortalAction(pendingAction)}</strong><span>Confirm before anything changes.</span><div><button onClick={onConfirmPending} type="button">Confirm</button><button onClick={onCancelPending} type="button">Cancel</button></div></div> : null}
       <div aria-label="Voice controls" className="assistant-voice-controls" role="group">
         {onToggleDocument ? <button aria-controls="assistant-document-review" aria-expanded={documentOpen} aria-label="Attach synthetic document" className="assistant-voice-icon-action" disabled={!active} onClick={onToggleDocument} title="Attach synthetic document" type="button"><Paperclip aria-hidden="true" size={19} /><span>Attach</span></button> : null}
         <button aria-label="Open text chat" className="assistant-voice-icon-action" disabled={!active} onClick={returnToText} title="Open text chat" type="button"><Keyboard aria-hidden="true" size={19} /><span>Text</span></button>

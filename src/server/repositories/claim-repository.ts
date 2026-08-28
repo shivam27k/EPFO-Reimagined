@@ -1,7 +1,8 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { ensureDatabaseReady, getDb } from "@/db/client";
-import { claimEvents, claims, scenarioRuns, simulationEvents } from "@/db/schema";
+import { claimEvents, claims, employments, scenarioRuns, simulationEvents } from "@/db/schema";
+import type { ActionTransaction } from "@/server/assistant/action-contracts";
 import { addCalendarMonthsClamped, addMinutes, formatDemoDate } from "@/domain/demo-timeline";
 import { calculatePostedEpfBalance } from "@/domain/epf-balance";
 import { demoReferenceDate } from "@/domain/service-readiness";
@@ -87,20 +88,29 @@ export async function createFinalSettlementClaim(demoRunId: string, idempotencyK
   return getMemberSnapshot(demoRunId);
 }
 
-export async function advanceFinalSettlementClaim(
-  demoRunId: string,
-  command:
+export type ClaimSimulationCommand =
     | "SIMULATE_CRYPTIC_STATUS"
     | "SIMULATE_TWO_MONTH_WAIT"
     | "SIMULATE_EPFO_APPROVAL"
     | "SIMULATE_PAYMENT_RETURNED"
-    | "SIMULATE_BANK_PAYMENT",
-) {
+    | "SIMULATE_BANK_PAYMENT";
+
+export async function advanceFinalSettlementClaim(demoRunId: string, command: ClaimSimulationCommand) {
   await ensureDatabaseReady();
-  const snapshot = await getMemberSnapshot(demoRunId);
-  await getDb().transaction(async (tx) => {
+  await getDb().transaction((tx) => advanceClaimInTransaction(tx, demoRunId, command));
+  return getMemberSnapshot(demoRunId);
+}
+
+export async function advanceClaimInTransaction(
+  tx: ActionTransaction, demoRunId: string, command: ClaimSimulationCommand,
+  target?: { employmentId?: string; claimId?: string },
+) {
     if (command === "SIMULATE_TWO_MONTH_WAIT") {
-      const exitDate = snapshot.employments.find((employment) => employment.exitedAt)?.exitedAt;
+      const employmentRows = await tx.select().from(employments).where(and(
+        eq(employments.demoRunId, demoRunId), target?.employmentId ? eq(employments.id, target.employmentId) : undefined,
+      ));
+      if (employmentRows.length !== 1) throw new Error("Choose an unambiguous employment before advancing time.");
+      const exitDate = employmentRows[0].exitedAt;
       if (!exitDate) throw new Error("An employment exit date is required before advancing unemployment time.");
       const eligibleDate = addCalendarMonthsClamped(exitDate, 2);
       const twoMonthWaitEvent = {
@@ -123,8 +133,18 @@ export async function advanceFinalSettlementClaim(
       return;
     }
 
-    const [claim] = await tx.select().from(claims).where(eq(claims.demoRunId, demoRunId));
-    if (!claim) throw new Error("Final settlement claim not found.");
+    const claimRows = await tx.select().from(claims).where(and(
+      eq(claims.demoRunId, demoRunId), target?.claimId ? eq(claims.id, target.claimId) : undefined,
+    ));
+    if (claimRows.length !== 1) throw new Error("Choose an unambiguous existing claim.");
+    const claim = claimRows[0];
+    const allowed: Record<Exclude<ClaimSimulationCommand, "SIMULATE_TWO_MONTH_WAIT">, readonly string[]> = {
+      SIMULATE_CRYPTIC_STATUS: ["SUBMITTED"],
+      SIMULATE_EPFO_APPROVAL: ["SUBMITTED", "UNDER_REVIEW"],
+      SIMULATE_PAYMENT_RETURNED: ["APPROVED", "PAYMENT_SENT"],
+      SIMULATE_BANK_PAYMENT: ["APPROVED", "PAYMENT_SENT", "PAYMENT_RETURNED"],
+    };
+    if (!allowed[command].includes(claim.status)) throw new Error("This transition is not available for the recorded claim state.");
 
     const submittedAt = claim.submittedAt ?? `${demoReferenceDate}T11:00:00.000Z`;
 
@@ -203,7 +223,4 @@ export async function advanceFinalSettlementClaim(
       occurredAt: addMinutes(submittedAt, 150),
     }).onConflictDoNothing();
     await tx.update(scenarioRuns).set({ stage: "RESOLVED", updatedAt: addMinutes(submittedAt, 150) }).where(eq(scenarioRuns.id, `${demoRunId}:scenario:payment-returned`));
-  });
-
-  return getMemberSnapshot(demoRunId);
 }

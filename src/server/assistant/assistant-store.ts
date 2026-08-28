@@ -126,9 +126,13 @@ export async function getAssistantState(demoRunId: string) {
   }
   const visibleMessages = messages.map((message) => ({
     ...message,
-    actions: message.actions?.filter((action) => !decidedProposalKeys.has(`${action.type}-${action.label}`.slice(0, 120))),
+    // Legacy cards have no persisted proposal/consent binding. Do not surface
+    // old mutation buttons as a bypass; Task 5 renders fresh action-store proposals.
+    actions: message.actions?.filter((action) => action.type === "NAVIGATE" &&
+      !decidedProposalKeys.has(`${action.type}-${action.label}`.slice(0, 120))),
   }));
-  return { messages: visibleMessages.slice(-16), dismissedPromptKeys: [...dismissedPromptKeys], formPatchProposal };
+  return { messages: visibleMessages.slice(-16), dismissedPromptKeys: [...dismissedPromptKeys], formPatchProposal: [],
+    ...(formPatchProposal.length ? { formPatchNotice: "Prepare a fresh stored proposal to review these legacy fields again." } : {}) };
 }
 
 export function sanitizeMemberMessage(message: string) {

@@ -1,12 +1,13 @@
 import { z } from "zod";
 
-import { AuthenticationError, requireCurrentRun } from "@/server/auth/session";
+import { AuthenticationError } from "@/server/auth/session";
 import {
   deterministicSyntheticExtraction,
   type SyntheticDocumentKind,
 } from "@/server/assistant/document-extractor";
 import { getMemberSnapshot } from "@/server/repositories/member-repository";
-import { storeFormPatchProposal } from "@/server/assistant/assistant-store";
+import { storeDocumentSource } from "@/server/assistant/onboarding-sources";
+import { assistantHttpError, requireAssistantRequest } from "@/server/assistant/http";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const acceptedTypes = new Set(["application/pdf", "image/jpeg", "image/png"]);
@@ -17,7 +18,7 @@ const metadataSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const current = await requireCurrentRun();
+    const current = await requireAssistantRequest(request);
     if (current.demoRun.persona !== "NEW_MEMBER") {
       return Response.json({ error: "Document-assisted onboarding is available only for the new-member demo." }, { status: 403 });
     }
@@ -41,12 +42,18 @@ export async function POST(request: Request) {
     const snapshot = await getMemberSnapshot(current.demoRun.id);
     const proposals = deterministicSyntheticExtraction(
       metadata.documentKind as SyntheticDocumentKind,
-      upload.name.slice(0, 120),
+      "Synthetic document",
       snapshot,
     );
-    await storeFormPatchProposal(current.demoRun.id, proposals);
+    const source = await storeDocumentSource(current.demoRun.id, metadata.documentKind, proposals);
     return Response.json({
-      proposals,
+      proposals: proposals.map((proposal) => ({
+        ...proposal,
+        proposedValue: source.patch.maskedValues[proposal.field as keyof typeof source.patch.maskedValues] ?? proposal.proposedValue,
+      })),
+      documentProposalId: source.documentProposalId,
+      expiresAt: source.expiresAt,
+      sourcePersisted: true,
       extractionMode: "deterministic-synthetic-demo",
       persisted: false,
       disclosure: "The upload was not stored and its bytes were not sent to OpenAI or any government system. Review every proposed value before applying it.",
@@ -55,6 +62,6 @@ export async function POST(request: Request) {
     if (error instanceof AuthenticationError) return Response.json({ error: "Authentication required." }, { status: 401 });
     if (error instanceof z.ZodError) return Response.json({ error: error.issues[0]?.message ?? "Check the synthetic document details." }, { status: 422 });
     if (error instanceof TypeError) return Response.json({ error: "Upload the document as multipart form data." }, { status: 400 });
-    return Response.json({ error: "The synthetic document could not be reviewed. Try again." }, { status: 500 });
+    return assistantHttpError(error);
   }
 }

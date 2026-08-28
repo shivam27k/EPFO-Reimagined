@@ -13,12 +13,18 @@ describe("Realtime assistant session configuration", () => {
   let demoRunId: string;
   let previousRealtimeModel: string | undefined;
   let previousRealtimeTranscribeModel: string | undefined;
+  let previousRealtimeVoice: string | undefined;
+  let previousRealtimeVad: string | undefined;
 
   beforeEach(async () => {
     previousRealtimeModel = process.env.OPENAI_REALTIME_MODEL;
     previousRealtimeTranscribeModel = process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL;
+    previousRealtimeVoice = process.env.OPENAI_REALTIME_VOICE;
+    previousRealtimeVad = process.env.OPENAI_REALTIME_VAD;
     delete process.env.OPENAI_REALTIME_MODEL;
     delete process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL;
+    delete process.env.OPENAI_REALTIME_VOICE;
+    delete process.env.OPENAI_REALTIME_VAD;
     testDatabase = await createIsolatedTestDatabase();
     await seedAllDemoUsers();
     const [user] = await getDb()
@@ -33,10 +39,14 @@ describe("Realtime assistant session configuration", () => {
     else process.env.OPENAI_REALTIME_MODEL = previousRealtimeModel;
     if (previousRealtimeTranscribeModel === undefined) delete process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL;
     else process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL = previousRealtimeTranscribeModel;
+    if (previousRealtimeVoice === undefined) delete process.env.OPENAI_REALTIME_VOICE;
+    else process.env.OPENAI_REALTIME_VOICE = previousRealtimeVoice;
+    if (previousRealtimeVad === undefined) delete process.env.OPENAI_REALTIME_VAD;
+    else process.env.OPENAI_REALTIME_VAD = previousRealtimeVad;
     await testDatabase.cleanup();
   });
 
-  it("enables bidirectional audio with server VAD on the instruction-following default model", async () => {
+  it("enables bidirectional audio with medium semantic VAD and cedar on the instruction-following default model", async () => {
     const config = await buildRealtimeSessionConfig({ demoRunId, route: "/claims" });
 
     expect(config).toMatchObject({
@@ -50,13 +60,13 @@ describe("Realtime assistant session configuration", () => {
             prompt: expect.stringMatching(/English.*Latin.*Hindi.*Devanagari/i),
           },
           turn_detection: {
-            type: "server_vad",
+            type: "semantic_vad",
+            eagerness: "medium",
             create_response: true,
             interrupt_response: true,
-            silence_duration_ms: 1500,
           },
         },
-        output: { voice: "coral" },
+        output: { voice: "cedar" },
       },
     });
 
@@ -66,6 +76,30 @@ describe("Realtime assistant session configuration", () => {
     expect(transcription).not.toHaveProperty("language");
     expect(transcription.prompt).toMatch(/never.*(?:Urdu|Arabic)/i);
     expect(transcription.prompt).toMatch(/EPF|UAN|KYC|passbook|claim/i);
+  });
+
+  it("applies configurable server VAD fallback without changing the configured model", async () => {
+    process.env.OPENAI_REALTIME_MODEL = "gpt-realtime-2.1";
+    process.env.OPENAI_REALTIME_VOICE = "marin";
+    process.env.OPENAI_REALTIME_VAD = "server_vad";
+
+    const config = await buildRealtimeSessionConfig({ demoRunId, route: "/overview" });
+
+    expect(config).toMatchObject({
+      model: "gpt-realtime-2.1",
+      audio: {
+        input: {
+          turn_detection: {
+            type: "server_vad",
+            create_response: true,
+            interrupt_response: true,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 1500,
+          },
+        },
+        output: { voice: "marin" },
+      },
+    });
   });
 
   it("grounds bilingual instructions in masked screen context only", async () => {
@@ -87,6 +121,10 @@ describe("Realtime assistant session configuration", () => {
     expect(instructions).toMatch(/expand.*question.*requires/i);
     expect(instructions).toMatch(/do not add.*UMANG.*background/i);
     expect(instructions).not.toMatch(/maximum|hard limit|never exceed/i);
+    expect(instructions).toMatch(/plain[- ]language/i);
+    expect(instructions).toMatch(/pronounce.*Hindi.*Devanagari/i);
+    expect(instructions).toMatch(/code-switch/i);
+    expect(instructions).not.toMatch(/Format every answer as concise Markdown/i);
   });
 
   it("treats sanitized currently rendered page text as authoritative over stale metadata", async () => {

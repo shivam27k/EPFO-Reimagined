@@ -1,9 +1,14 @@
-import { getMemberSnapshot } from "@/server/repositories/member-repository";
+import { getMemberSnapshot, getMemberSnapshotWithVersion } from "@/server/repositories/member-repository";
 import { processDefinitions } from "@/domain/process-definitions";
 import { calculatePostedEpfBalance } from "@/domain/epf-balance";
-import { getAssistantState, sanitizeMemberMessage } from "./assistant-store";
+import { getAssistantState } from "./assistant-store";
+import { redactModelText } from "./model-text";
+import { portalPageForRoute, portalSiteMap } from "@/domain/portal-site-map";
+import { getPortalServiceGroups } from "@/domain/portal-services";
 
 export interface AssistantContext {
+  siteMap: typeof portalSiteMap;
+  contextVersion: string;
   route: string;
   screen: {
     name: string;
@@ -21,36 +26,23 @@ export interface AssistantContext {
   allowedActions: string[];
 }
 
-const screenCatalog = [
-  { path: "/claims/advance", name: "PF advance", purpose: "Explain Form 31 purpose rules and account-basis checks.", officialTerm: "PF advance · Form 31 / Composite Claim Form" },
-  { path: "/claims/pension-withdrawal", name: "Pension withdrawal or Scheme Certificate", purpose: "Explain the Form 10C service boundary and possible outcomes.", officialTerm: "Withdrawal benefit / Scheme Certificate · Form 10C" },
-  { path: "/claims/pension", name: "Monthly pension readiness", purpose: "Explain Form 10D pension categories and readiness.", officialTerm: "Monthly pension · Form 10D" },
-  { path: "/claims", name: "Final settlement", purpose: "Check, submit, or track the fictional full PF withdrawal journey.", officialTerm: "Final settlement · Form 19" },
-  { path: "/employment/mark-exit", name: "Mark employment exit", purpose: "Record a fictional employment exit after checking the date, reason, authentication, and consequences.", officialTerm: "Member-side Mark Exit" },
-  { path: "/employment", name: "Employment history", purpose: "Review service records and determine whether an exit-date update is needed.", officialTerm: "UAN-linked service records" },
-  { path: "/transfers/annexure-k", name: "Annexure K", purpose: "Explain the transfer certificate, its status, and the records it contains.", officialTerm: "Transfer Certificate · Annexure K" },
-  { path: "/transfers", name: "Transfer service", purpose: "Check readiness to move previous EPF service into the current account.", officialTerm: "Transfer claim · Form 13 / auto-transfer" },
-  { path: "/onboarding", name: "New-member setup", purpose: "Complete the four guided identity, contact, employment, and KYC sections.", officialTerm: "Simulated UMANG UAN return and Member Portal KYC review" },
-  { path: "/passbook", name: "Contributions and passbook", purpose: "Review monthly contribution status, posted balances, and missing months.", officialTerm: "EPF passbook" },
-  { path: "/profile", name: "Profile and KYC", purpose: "Review identity, PAN, bank verification, and the item needing attention.", officialTerm: "Member profile and Manage > KYC" },
-  { path: "/uan-card", name: "UAN card", purpose: "Review or print the masked fictional UAN card.", officialTerm: "UAN card" },
-  { path: "/contact-details", name: "Contact details", purpose: "Review the masked mobile record and simulated update process.", officialTerm: "UAN-linked mobile number" },
-  { path: "/basic-details", name: "Basic details", purpose: "Explain name and date-of-birth correction requests.", officialTerm: "Basic details correction" },
-  { path: "/security", name: "Account security", purpose: "Review session safeguards and the simulated security-review process." },
-  { path: "/nomination", name: "e-Nomination", purpose: "Check nomination readiness and explain the fictional family-allocation example.", officialTerm: "e-Nomination · Form 2 and Aadhaar e-sign" },
-  { path: "/pmvbry", name: "PMVBRY first-timer evidence", purpose: "Explain the deterministic Part A evidence checkpoints for this fictional member.", officialTerm: "PMVBRY Part A · First Timer" },
-  { path: "/services", name: "Online services", purpose: "Help the member choose an EPF outcome before selecting the official form or service." },
-  { path: "/help", name: "Help and grievances", purpose: "Explain who owns an EPF issue and when to use the official grievance channel.", officialTerm: "EPFiGMS" },
-  { path: "/overview", name: "Overview", purpose: "Show the highest-priority account issue, current records, and the recommended next action." },
-] as const;
 
 function screenForRoute(
   route: string,
   snapshot: Awaited<ReturnType<typeof getMemberSnapshot>>,
 ): AssistantContext["screen"] {
   const pathname = route.split("?")[0] || "/overview";
-  const match = screenCatalog.find((screen) => pathname === screen.path || pathname.startsWith(`${screen.path}/`));
+  const match = portalPageForRoute(pathname);
   const base = match ?? { name: "EPF member portal", purpose: "Help the member understand the current page and choose a safe next action." };
+
+  if (pathname === "/services") {
+    const claimStatus = (snapshot.activeClaim ?? snapshot.latestClaim)?.status.replaceAll("_", " ").toLowerCase();
+    const groups = getPortalServiceGroups(claimStatus);
+    return { ...base, currentState: "Choose from nine services grouped by member outcome.",
+      visibleFacts: groups.flatMap((group) => group.services.map((service) =>
+        `${group.title}: ${service.title} — ${service.term}. ${service.description} Route: ${service.href}`)),
+    };
+  }
 
   if (pathname === "/employment") {
     const openEmployments = snapshot.employments.filter((employment) => !employment.exitedAt);
@@ -73,14 +65,14 @@ function screenForRoute(
 
   return {
     ...base,
-    currentState: snapshot.nextAction.label,
-    visibleFacts: snapshot.findings.slice(0, 4).map((finding) => `${finding.title}: ${finding.explanation}`),
+    currentState: "Page structure is known. Use current rendered text and member records for dynamic status, not unrelated account alerts.",
+    visibleFacts: (match?.sections ?? []).map((section) => `Page section: ${section}`),
   };
 }
 
 export function sanitizeRenderedScreenText(text: string | undefined): string | null {
   if (!text) return null;
-  const normalized = sanitizeMemberMessage(text)
+  const normalized = redactModelText(text)
     .replace(/\b\d{4}[\s-]+\d{4}[\s-]+\d{4}\b/g, "[masked Aadhaar-format value]")
     .replace(/\b[A-Z]{5}\d{10,22}\b/gi, "[masked EPF member ID]")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
@@ -104,10 +96,11 @@ function claimForAssistant(
   claim: Awaited<ReturnType<typeof getMemberSnapshot>>["activeClaim"],
 ) {
   if (!claim) return null;
-  const { amount, ...claimWithoutStoredAmount } = claim;
   return {
-    ...claimWithoutStoredAmount,
-    amountDisplayed: formatRupeesForDisplay(amount),
+    type: claim.type,
+    status: claim.status,
+    submittedAt: claim.submittedAt,
+    amountDisplayed: formatRupeesForDisplay(claim.amount),
     currency: "INR",
   };
 }
@@ -116,14 +109,26 @@ export async function buildAssistantContext({
   demoRunId,
   route,
   visibleScreenText,
+  signal,
 }: {
   demoRunId: string;
   route: string;
   visibleScreenText?: string;
+  signal?: AbortSignal;
 }): Promise<AssistantContext> {
-  const snapshot = await getMemberSnapshot(demoRunId);
+  signal?.throwIfAborted();
+  const { snapshot, contextVersion } = await getMemberSnapshotWithVersion(demoRunId);
+  signal?.throwIfAborted();
   const state = await getAssistantState(demoRunId);
-  const renderedScreenText = sanitizeRenderedScreenText(visibleScreenText);
+  signal?.throwIfAborted();
+  const safeText = (text: string) => redactModelText(text, demoRunId);
+  const renderedScreenText = sanitizeRenderedScreenText(visibleScreenText ? safeText(visibleScreenText) : undefined);
+  const screen = screenForRoute(route, snapshot);
+  const findings = snapshot.findings.map((finding) => ({
+    code: finding.code, severity: finding.severity, owner: finding.owner,
+    title: safeText(finding.title), explanation: safeText(finding.explanation),
+    allowedActions: finding.allowedActions.map((action) => action),
+  }));
   const processKey: "ONBOARDING" | "FINAL_CLAIM" | null = route.includes("onboarding") ? "ONBOARDING" : route.includes("claims") ? "FINAL_CLAIM" : null;
   const activeProcess = processKey ? {
     key: processKey,
@@ -131,26 +136,31 @@ export async function buildAssistantContext({
     questionCount: processDefinitions[processKey].questions.length,
   } : null;
   return {
-    route,
-    screen: screenForRoute(route, snapshot),
+    contextVersion,
+    siteMap: portalSiteMap,
+    route: safeText(route.split(/[?#]/)[0]),
+    screen: { ...screen, currentState: safeText(screen.currentState), visibleFacts: screen.visibleFacts.map(safeText) },
     renderedScreen: renderedScreenText
       ? { source: "current-rendered-page", text: renderedScreenText }
       : null,
     snapshot,
-    findings: snapshot.findings,
+    findings,
     maskedModelSnapshot: {
       persona: snapshot.persona,
       profile: { uanMasked: snapshot.profile.uanMasked, onboardingComplete: snapshot.profile.onboardingComplete },
-      kyc: snapshot.kyc.map((item) => ({ type: item.type, status: item.status, valueMasked: item.valueMasked })),
+      kyc: snapshot.kyc.map((item) => ({ type: item.type, status: item.status, valueMasked: safeText(item.valueMasked) })),
       employments: snapshot.employments.map((item) => ({
         memberIdMasked: item.memberIdMasked,
-        establishmentName: item.establishmentName,
+        establishmentName: safeText(item.establishmentName),
         joinedAt: item.joinedAt,
         exitedAt: item.exitedAt,
       })),
       activeClaim: claimForAssistant(snapshot.activeClaim),
       latestClaim: claimForAssistant(snapshot.latestClaim ?? null),
-      claimEvents: snapshot.claimEvents.slice(0, 6),
+      claimEvents: snapshot.claimEvents.slice(0, 6).map((event) => ({
+        status: event.status, actor: event.actor, occurredAt: event.occurredAt,
+        explanation: safeText(event.explanation),
+      })),
       contributionSummary: {
         currency: "INR",
         displayUnit: "whole rupees",
@@ -163,12 +173,17 @@ export async function buildAssistantContext({
         employerEpfDisplayed: formatRupeesForDisplay(item.employerEpf),
         employerEpsDisplayed: formatRupeesForDisplay(item.employerEps),
       })),
-      simulations: snapshot.simulations,
-      scenarios: snapshot.scenarioRuns,
-      nextAction: snapshot.nextAction,
+      simulations: snapshot.simulations.map((simulation) => ({
+        kind: simulation.kind, intervalStart: simulation.intervalStart, intervalEnd: simulation.intervalEnd,
+        intervalLabel: safeText(simulation.intervalLabel), months: simulation.months, recordedAt: simulation.recordedAt,
+      })),
+      scenarios: snapshot.scenarioRuns.map((scenario) => ({
+        scenarioKey: scenario.scenarioKey, stage: scenario.stage, updatedAt: scenario.updatedAt,
+      })),
+      nextAction: { label: safeText(snapshot.nextAction.label), href: snapshot.nextAction.href },
     },
     activeProcess,
-    recentConversation: state.messages.slice(-8).map(({ role, text }) => ({ role, text })),
-    allowedActions: ["NAVIGATE", "REQUEST_EMPLOYER_CORRECTION", "EXTRACT_DOCUMENT", "PATCH_FORM", "APPLY_DEMO_CORRECTION"],
+    recentConversation: state.messages.slice(-8).map(({ role, text }) => ({ role, text: safeText(text) })),
+    allowedActions: ["NAVIGATE"],
   };
 }
