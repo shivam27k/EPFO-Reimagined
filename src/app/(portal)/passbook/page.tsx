@@ -10,8 +10,8 @@ import {
   TaskPageHeader,
 } from "@/components/ui/task-first";
 import { calculatePostedEpfBalance } from "@/domain/epf-balance";
-import { requireCurrentRun } from "@/server/auth/session";
-import { getMemberSnapshot } from "@/server/repositories/member-repository";
+import { getCachedCurrentRun as requireCurrentRun } from "@/server/auth/session";
+import { getCachedMemberSnapshot as getMemberSnapshot } from "@/server/repositories/member-repository";
 
 function formatRupees(amountInPaise: number) {
   return new Intl.NumberFormat("en-IN", {

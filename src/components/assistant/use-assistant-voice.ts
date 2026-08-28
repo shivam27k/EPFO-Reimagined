@@ -286,8 +286,8 @@ export function useAssistantVoice({
 
     switch (event.type) {
       case "response.created": {
-        const response = event.response as { id?: string } | undefined;
-        if (response?.id) toolSessionRef.current?.responseCreated(response.id);
+        const response = event.response as { id?: string; metadata?: unknown } | undefined;
+        if (response?.id) toolSessionRef.current?.responseCreated(response.id, response.metadata);
         break;
       }
       case "conversation.item.created": {
@@ -306,6 +306,9 @@ export function useAssistantVoice({
         publishCaptions();
         break;
       }
+      case "conversation.item.input_audio_transcription.failed":
+        if (typeof event.item_id === "string") toolSessionRef.current?.transcriptionFailed(event.item_id);
+        break;
       case "conversation.item.input_audio_transcription.completed": {
         if (typeof event.transcript !== "string") return;
         const item = upsertCaptionItem(eventItemId(event, "member"), "member");
@@ -342,6 +345,9 @@ export function useAssistantVoice({
         break;
       case "response.done":
         if (event.response && typeof event.response === "object") toolSessionRef.current?.responseDone(event.response as Record<string, unknown>);
+        break;
+      case "input_audio_buffer.speech_stopped":
+        if (typeof event.item_id === "string") toolSessionRef.current?.speechStopped(event.item_id);
         break;
       case "input_audio_buffer.speech_started":
         if (outputItemRef.current) {

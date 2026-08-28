@@ -4,8 +4,8 @@ import Link from "next/link";
 import { MemberRequestAction } from "@/components/member/member-request-action";
 import styles from "@/components/member/member-management.module.css";
 import { CompactFacts, DetailDisclosure, NextActionPanel, TaskPageHeader } from "@/components/ui/task-first";
-import { requireCurrentRun } from "@/server/auth/session";
-import { getMemberSnapshot } from "@/server/repositories/member-repository";
+import { getCachedCurrentRun as requireCurrentRun } from "@/server/auth/session";
+import { getCachedMemberSnapshot as getMemberSnapshot } from "@/server/repositories/member-repository";
 import { getMemberRequests, type MemberRequestType } from "@/server/services/member-request-service";
 
 export default async function BasicDetailsPage({ searchParams }: { searchParams: Promise<{ field?: string }> }) {

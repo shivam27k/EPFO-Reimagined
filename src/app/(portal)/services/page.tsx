@@ -2,8 +2,8 @@ import { ArrowRight } from "lucide-react";
 import Link from "next/link";
 
 import { DetailDisclosure, TaskPageHeader } from "@/components/ui/task-first";
-import { requireCurrentRun } from "@/server/auth/session";
-import { getMemberSnapshot } from "@/server/repositories/member-repository";
+import { getCachedCurrentRun as requireCurrentRun } from "@/server/auth/session";
+import { getCachedMemberSnapshot as getMemberSnapshot } from "@/server/repositories/member-repository";
 import styles from "./services.module.css";
 import { getPortalServiceGroups } from "@/domain/portal-services";
 

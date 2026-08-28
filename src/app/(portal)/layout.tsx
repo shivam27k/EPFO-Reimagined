@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { PortalShell } from "@/components/portal/portal-shell";
 import {
   AuthenticationError,
-  requireCurrentRun,
+  getCachedCurrentRun as requireCurrentRun,
 } from "@/server/auth/session";
 import { getCachedMemberSnapshot } from "@/server/repositories/member-repository";
 

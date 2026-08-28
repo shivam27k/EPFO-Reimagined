@@ -72,12 +72,16 @@ function isCurrentMobileSection(pathname: string, href: string) {
 
 function NavigationLinks({ mobile = false }: { mobile?: boolean }) {
   const pathname = usePathname();
+  const router = useRouter();
+  // Warm the destination on intent, without eagerly loading every member page.
+  const prefetch = (href: string) => { if (href !== pathname) router.prefetch(href); };
 
   if (mobile) {
     return (
       <nav className="mobile-navigation" aria-label="Mobile portal">
         {mobileNavigationItems.map(({ href, label, icon: Icon }) => (
-          <Link aria-current={isCurrentMobileSection(pathname, href) ? "page" : undefined} href={href} key={href}>
+          <Link aria-current={isCurrentMobileSection(pathname, href) ? "page" : undefined} href={href} key={href}
+            onPointerEnter={() => prefetch(href)} onFocus={() => prefetch(href)} onTouchStart={() => prefetch(href)}>
             <Icon size={19} aria-hidden="true" />
             <span>{label}</span>
           </Link>
@@ -95,7 +99,8 @@ function NavigationLinks({ mobile = false }: { mobile?: boolean }) {
             {group.items.map((href) => {
               const { label, icon: Icon } = navigationItems.find((item) => item.href === href)!;
               return (
-                <Link aria-current={isCurrentSection(pathname, href) ? "page" : undefined} href={href} key={href}>
+                <Link aria-current={isCurrentSection(pathname, href) ? "page" : undefined} href={href} key={href}
+                  onPointerEnter={() => prefetch(href)} onFocus={() => prefetch(href)}>
                   <Icon size={18} aria-hidden="true" />
                   <span>{label}</span>
                 </Link>

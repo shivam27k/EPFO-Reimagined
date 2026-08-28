@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { OnboardingForm } from "@/components/forms/onboarding-form";
 import { TaskPageHeader } from "@/components/ui/task-first";
 import { getOnboardingPreflight } from "@/domain/process-definitions";
-import { requireCurrentRun } from "@/server/auth/session";
+import { getCachedCurrentRun as requireCurrentRun } from "@/server/auth/session";
 import { getOnboardingDraft } from "@/server/services/onboarding-service";
 
 export default async function OnboardingPage() {

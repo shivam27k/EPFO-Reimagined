@@ -2,8 +2,8 @@ import { Check, FileSignature, Info, UsersRound } from "lucide-react";
 import Link from "next/link";
 
 import { CompactFacts, DetailDisclosure, NextActionPanel, TaskPageHeader } from "@/components/ui/task-first";
-import { requireCurrentRun } from "@/server/auth/session";
-import { getMemberSnapshot } from "@/server/repositories/member-repository";
+import { getCachedCurrentRun as requireCurrentRun } from "@/server/auth/session";
+import { getCachedMemberSnapshot as getMemberSnapshot } from "@/server/repositories/member-repository";
 
 export default async function NominationPage() {
   const current = await requireCurrentRun();

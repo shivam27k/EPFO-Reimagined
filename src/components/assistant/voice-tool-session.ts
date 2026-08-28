@@ -30,12 +30,15 @@ export class VoiceToolSession {
   private captions = new Set<string>();
   private queue: Promise<void> = Promise.resolve();
   private activeResponse: string | null = null;
+  private transcriptTimer: ReturnType<typeof setTimeout> | null = null;
   constructor(private deps: Dependencies) {}
 
   private current(turn: Turn | null): turn is Turn {
     return !!turn && turn === this.turn && turn.generation === this.generation && !turn.controller.signal.aborted;
   }
   interrupt() {
+    if (this.transcriptTimer) clearTimeout(this.transcriptTimer);
+    this.transcriptTimer = null;
     this.turn?.controller.abort();
     this.turn?.resolve(null);
     this.turn = null;
@@ -51,10 +54,50 @@ export class VoiceToolSession {
     this.turn = { generation: this.generation, itemId, route, controller: new AbortController(),
       registered, resolve, registrationStarted: false, attempts: 0 };
   }
-  responseCreated(responseId: string) {
+  responseCreated(responseId: string, metadata?: unknown) {
     if (!responseId) return;
+    // Bind delayed responses to their originating utterance, not newer speech.
+    const owner = metadata && typeof metadata === "object"
+      ? (metadata as Record<string, unknown>).portal_turn : null;
+    if (!this.current(this.turn) || owner !== this.responseKey(this.turn)) {
+      this.responses.set(responseId, null);
+      this.deps.send({ type: "response.cancel", response_id: responseId });
+      return;
+    }
     this.responses.set(responseId, this.turn);
     this.activeResponse = responseId;
+  }
+  speechStopped(itemId: string) {
+    const turn = this.turn;
+    if (!this.current(turn) || turn.itemId !== itemId || turn.registrationStarted) return;
+    if (this.transcriptTimer) clearTimeout(this.transcriptTimer);
+    this.transcriptTimer = setTimeout(() => {
+      this.transcriptTimer = null;
+      if (this.current(turn)) this.transcriptionFailed(itemId);
+    }, 15_000);
+  }
+  private responseKey(turn: Turn) { return this.sessionId + "_" + turn.generation; }
+  private requestResponse(turn: Turn, disableTools = false) {
+    if (!this.current(turn)) return;
+    this.deps.send({ type: "response.create", response: {
+      metadata: { portal_turn: this.responseKey(turn) },
+      ...(disableTools ? { tool_choice: "none" } : {}),
+    } });
+  }
+  private reportRegistrationFailure(turn: Turn) {
+    if (!this.current(turn) || !turn.registrationFailure) return;
+    this.deps.onResult({ callId: this.responseKey(turn), status: "unavailable", contextVersion: "unavailable",
+      message: turn.registrationFailure.message, error: { code: turn.registrationFailure.code, retryable: false } });
+  }
+  transcriptionFailed(itemId: string) {
+    const turn = this.turn;
+    if (!this.current(turn) || turn.itemId !== itemId || turn.registrationStarted) return;
+    if (this.transcriptTimer) clearTimeout(this.transcriptTimer);
+    this.transcriptTimer = null;
+    turn.registrationStarted = true;
+    turn.registrationFailure = { code: "TRANSCRIPTION_FAILED", message: "Your speech could not be transcribed. Try again or use text chat; no action was taken." };
+    turn.resolve(null);
+    this.reportRegistrationFailure(turn);
   }
   acceptsResponse(responseId: unknown) {
     return typeof responseId !== "string" || this.current(this.responses.get(responseId) ?? null);
@@ -65,21 +108,28 @@ export class VoiceToolSession {
     if (!this.turn && !this.responses.size) this.speechStarted(itemId, route);
     const turn = this.turn;
     if (!this.current(turn) || (turn.itemId && itemId !== turn.itemId) || turn.registrationStarted) return;
+    if (this.transcriptTimer) clearTimeout(this.transcriptTimer);
+    this.transcriptTimer = null;
     turn.itemId = itemId;
     turn.registrationStarted = true;
     if (!text.trim() || text.length > 1000) {
       turn.registrationFailure = { code: "TRANSCRIPT_INVALID", message: "The transcript was empty or too long. Please repeat a shorter request; no tool was executed." };
+      this.reportRegistrationFailure(turn);
       turn.resolve(null); return;
     }
     try {
       const registration = await assistantRequest<Registration>("/api/assistant/turns", {
         requestKey: this.sessionId + "_" + itemId, route: turn.route, text,
-      }, turn.controller.signal);
+      }, AbortSignal.any([turn.controller.signal, AbortSignal.timeout(8_000)]));
       if (!this.current(turn)) return;
-      this.deps.send({ type: "conversation.item.create", item: { type: "message", role: "system",
+      const sent = this.deps.send({ type: "conversation.item.create", item: { type: "message", role: "system",
         content: [{ type: "input_text", text: "Portal trusted actual-user-turn registration (not model-authored consent): " +
           JSON.stringify(registration) }] } });
+      if (!sent) throw new Error("Voice connection closed before turn context was delivered.");
       turn.resolve(registration);
+      // Automatic VAD responses are disabled. The first response now has the
+      // current actual-user registration, including any exact confirmation.
+      this.requestResponse(turn);
     } catch (error) {
       if (!this.current(turn)) return;
       turn.registrationFailure = error instanceof AssistantRequestError
@@ -89,6 +139,7 @@ export class VoiceToolSession {
             : "The portal rejected transcript registration. " + error.message + " No tool was executed." }
         : { code: "TRANSCRIPT_REGISTRATION_UNAVAILABLE", message: "The portal could not register your transcript. Check the connection and try again; no tool was executed." };
       turn.resolve(null);
+      this.reportRegistrationFailure(turn);
     }
   }
   private async registration(turn: Turn): Promise<Registration | null> {
@@ -158,8 +209,7 @@ export class VoiceToolSession {
         sent += 1;
       }
       // Exactly one continuation after every output in this completed batch.
-      if (sent && this.current(turn)) this.deps.send({ type: "response.create",
-        ...(disableTools ? { response: { tool_choice: "none" } } : {}) });
+      if (sent && this.current(turn)) this.requestResponse(turn, disableTools);
     }).catch(() => {
       if (this.current(turn)) this.interrupt();
     });

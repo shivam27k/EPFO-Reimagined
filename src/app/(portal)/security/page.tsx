@@ -4,7 +4,7 @@ import { MemberRequestAction } from "@/components/member/member-request-action";
 import styles from "@/components/member/member-management.module.css";
 import { LogoutButton } from "@/components/portal/side-navigation";
 import { CompactFacts, DetailDisclosure, NextActionPanel, TaskPageHeader } from "@/components/ui/task-first";
-import { requireCurrentRun } from "@/server/auth/session";
+import { getCachedCurrentRun as requireCurrentRun } from "@/server/auth/session";
 import { getMemberRequests } from "@/server/services/member-request-service";
 
 export default async function SecurityPage() {

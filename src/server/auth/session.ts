@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 
 import { and, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
+import { cache } from "react";
 
 import { ensureDatabaseReady, getDb } from "@/db/client";
 import { demoRuns, demoUsers, sessions } from "@/db/schema";
@@ -100,19 +101,16 @@ export async function requireCurrentRun() {
   }
 
   const db = getDb();
-  const [user] = await db
-    .select({
+  const [[user], [demoRun]] = await Promise.all([
+    db.select({
       id: demoUsers.id,
       username: demoUsers.username,
       persona: demoUsers.persona,
       displayName: demoUsers.displayName,
-    })
-    .from(demoUsers)
-    .where(eq(demoUsers.id, session.userId));
-  const [demoRun] = await db
-    .select()
-    .from(demoRuns)
-    .where(and(eq(demoRuns.id, session.demoRunId), eq(demoRuns.userId, session.userId)));
+    }).from(demoUsers).where(eq(demoUsers.id, session.userId)),
+    db.select().from(demoRuns)
+      .where(and(eq(demoRuns.id, session.demoRunId), eq(demoRuns.userId, session.userId))),
+  ]);
 
   if (!user || !demoRun || demoRun.status !== "ACTIVE" || isExpired(demoRun.expiresAt)) {
     await destroySession(session.id);
@@ -125,3 +123,7 @@ export async function requireCurrentRun() {
     demoRun,
   };
 }
+
+// Render-request memoization only: layouts and pages share authentication reads.
+// API handlers and mutations continue using requireCurrentRun for fresh checks.
+export const getCachedCurrentRun = cache(requireCurrentRun);

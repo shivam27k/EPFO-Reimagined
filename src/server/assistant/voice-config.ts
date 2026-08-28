@@ -34,7 +34,7 @@ export function readRealtimeVoiceConfig(env: Record<string, string | undefined>)
       voice,
       turnDetection: {
         type: "server_vad",
-        create_response: true,
+        create_response: false,
         interrupt_response: true,
         prefix_padding_ms: 300,
         silence_duration_ms: 1500,
@@ -47,7 +47,7 @@ export function readRealtimeVoiceConfig(env: Record<string, string | undefined>)
     turnDetection: {
       type: "semantic_vad",
       eagerness: "medium",
-      create_response: true,
+      create_response: false,
       interrupt_response: true,
     },
   };

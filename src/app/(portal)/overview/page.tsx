@@ -9,7 +9,7 @@ import {
   type TaskTone,
 } from "@/components/ui/task-first";
 import type { Finding } from "@/domain/types";
-import { requireCurrentRun } from "@/server/auth/session";
+import { getCachedCurrentRun as requireCurrentRun } from "@/server/auth/session";
 import { getCachedMemberSnapshot } from "@/server/repositories/member-repository";
 
 const ownerLabels: Record<Finding["owner"], string> = {

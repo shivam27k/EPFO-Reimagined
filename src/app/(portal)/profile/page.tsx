@@ -9,8 +9,8 @@ import {
   type TaskTone,
 } from "@/components/ui/task-first";
 import type { Finding } from "@/domain/types";
-import { requireCurrentRun } from "@/server/auth/session";
-import { getMemberSnapshot } from "@/server/repositories/member-repository";
+import { getCachedCurrentRun as requireCurrentRun } from "@/server/auth/session";
+import { getCachedMemberSnapshot as getMemberSnapshot } from "@/server/repositories/member-repository";
 
 const kycFindingCodes = new Set([
   "BANK_NAME_MISMATCH",

@@ -9,11 +9,11 @@ const pageState = vi.hoisted(() => ({
 }));
 
 vi.mock("@/server/auth/session", () => ({
-  requireCurrentRun: vi.fn(async () => ({ demoRun: { id: "session-run" } })),
+  getCachedCurrentRun: vi.fn(async () => ({ demoRun: { id: "session-run" } })),
 }));
 
 vi.mock("@/server/repositories/member-repository", () => ({
-  getMemberSnapshot: vi.fn(async () => pageState.snapshot),
+  getCachedMemberSnapshot: vi.fn(async () => pageState.snapshot),
 }));
 
 vi.mock("next/navigation", () => ({

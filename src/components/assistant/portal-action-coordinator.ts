@@ -51,20 +51,24 @@ export async function executePortalAction(request: UiRequest, deps: Dependencies
   if (expected.route && initial.pathname !== expected.route) deps.navigate(expected.route);
   let target: HTMLElement | null = null;
   let expectedScrollTop: number | undefined;
-  if (action.name === "scroll_page") {
-    const maximum = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-    const destination = action.arguments.destination;
-    expectedScrollTop = destination === "top" ? 0 : destination === "bottom" ? maximum
-      : destination === "up" ? Math.max(0, scrollTop() - window.innerHeight * 0.8)
-      : Math.min(maximum, scrollTop() + window.innerHeight * 0.8);
-    window.scrollTo({ top: expectedScrollTop, left: 0, behavior: "instant" });
-  }
   try {
     while (Date.now() < deadline) {
       if (deps.signal.aborted) return { status: "cancelled", reason: "cancelled" };
       const current = deps.current();
-      const routeReady = !expected.route || (current.pathname === expected.route &&
-        window.location.pathname === expected.route && !!document.getElementById("portal-content"));
+      // The layout persists during navigation. Its presence alone does not mean
+      // the destination has rendered; never acknowledge a loading fallback.
+      const content = document.getElementById("portal-content");
+      const pageReady = !!content && !content.querySelector("[data-portal-loading]");
+      const routeReady = pageReady && (!expected.route || (current.pathname === expected.route &&
+        window.location.pathname === expected.route));
+      if (routeReady && action.name === "scroll_page" && expectedScrollTop === undefined) {
+        const maximum = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+        const destination = action.arguments.destination;
+        expectedScrollTop = destination === "top" ? 0 : destination === "bottom" ? maximum
+          : destination === "up" ? Math.max(0, scrollTop() - window.innerHeight * 0.8)
+          : Math.min(maximum, scrollTop() + window.innerHeight * 0.8);
+        window.scrollTo({ top: expectedScrollTop, left: 0, behavior: "instant" });
+      }
       if (routeReady && expected.target) {
         // The target originates in the domain enum, never an arbitrary selector.
         target = document.querySelector<HTMLElement>('[data-assistant-target="' + expected.target + '"]');

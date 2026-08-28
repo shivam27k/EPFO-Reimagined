@@ -2,8 +2,8 @@ import { ArrowRight, CheckCircle2, FileText, Info, ShieldAlert } from "lucide-re
 import Link from "next/link";
 
 import { CompactFacts, DetailDisclosure, NextActionPanel, TaskPageHeader } from "@/components/ui/task-first";
-import { requireCurrentRun } from "@/server/auth/session";
-import { getMemberSnapshot } from "@/server/repositories/member-repository";
+import { getCachedCurrentRun as requireCurrentRun } from "@/server/auth/session";
+import { getCachedMemberSnapshot as getMemberSnapshot } from "@/server/repositories/member-repository";
 
 export default async function TransfersPage() {
   const current = await requireCurrentRun();

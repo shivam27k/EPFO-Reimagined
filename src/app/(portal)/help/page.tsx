@@ -2,7 +2,7 @@ import { ExternalLink, MessageSquareWarning, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 
 import { CompactFacts, NextActionPanel, TaskPageHeader } from "@/components/ui/task-first";
-import { requireCurrentRun } from "@/server/auth/session";
+import { getCachedCurrentRun as requireCurrentRun } from "@/server/auth/session";
 import { getCachedMemberSnapshot } from "@/server/repositories/member-repository";
 import { HelpTopics } from "./help-topics";
 
