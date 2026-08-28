@@ -3,6 +3,7 @@ import { desc, eq } from "drizzle-orm";
 import { cache } from "react";
 
 import { evaluateClaimReadiness } from "@/domain/claim-rules";
+import { calculatePostedEpfBalance } from "@/domain/epf-balance";
 import { evaluateContributions } from "@/domain/contribution-rules";
 import type { MemberSnapshot as RuleSnapshot } from "@/domain/types";
 import { evaluateOnboarding } from "@/domain/onboarding-rules";
@@ -172,11 +173,14 @@ export async function getMemberSnapshotWithVersion(demoRunId: string): Promise<{
       ),
     },
     employment: {
-      exitDate: currentEmployment?.exitedAt ?? employmentRows[0]?.exitedAt ?? null,
+      hasRecord: employmentRows.length > 0,
+      isActive: !!currentEmployment,
+      exitDate: currentEmployment ? null : employmentRows[0]?.exitedAt ?? null,
       unemploymentAsOf: simulationRows[0]?.recordedAt
         ? simulationRows[0].recordedAt.slice(0, 10)
         : run.createdAt.slice(0, 10),
     },
+    postedEpfBalance: calculatePostedEpfBalance(contributionRows),
     contributions: contributionRows.map((contribution) => ({
       wageMonth: contribution.wageMonth,
       status: contribution.postingStatus === "POSTED" ? "POSTED" : "MISSING",
@@ -186,14 +190,13 @@ export async function getMemberSnapshotWithVersion(demoRunId: string): Promise<{
   };
 
   const findings = uniqueFindings([
+    ...evaluateClaimReadiness(ruleSnapshot),
     ...evaluateOnboarding(ruleSnapshot),
     ...evaluateContributions(ruleSnapshot),
-    ...(run.persona === "EXISTING_MEMBER" || profile.onboardingComplete || claimRows.length > 0
-      ? evaluateClaimReadiness(ruleSnapshot)
-      : []),
   ]);
 
   const snapshotWithoutAction: Omit<MemberSnapshot, "nextAction"> = {
+    claimEligibilityAsOf: ruleSnapshot.employment!.unemploymentAsOf,
     persona: run.persona,
     profile: {
       displayName: profile.aadhaarName,

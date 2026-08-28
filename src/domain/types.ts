@@ -58,9 +58,12 @@ export interface MemberSnapshot {
     changeRequestPending: boolean;
   };
   employment?: {
+    hasRecord?: boolean;
+    isActive?: boolean;
     exitDate: string | null;
     unemploymentAsOf: string;
   };
+  postedEpfBalance?: number;
   contributions?: Array<{
     wageMonth: string;
     status: ContributionStatus;

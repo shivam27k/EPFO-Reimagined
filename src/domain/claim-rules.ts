@@ -60,6 +60,26 @@ function addCalendarMonthsClamped(parts: IsoDateParts, months: number): Date {
 export function evaluateClaimReadiness(snapshot: MemberSnapshot): Finding[] {
   const findings: Finding[] = [];
 
+  if (!snapshot.profile.onboardingComplete) {
+    findings.push(finding({ code: "ONBOARDING_INCOMPLETE", severity: "BLOCKER", owner: "MEMBER",
+      title: "Complete your profile first", explanation: "Finish new-member setup before reviewing final-settlement eligibility.",
+      allowedActions: ["COMPLETE_ONBOARDING"] }));
+  }
+  if (snapshot.employment?.hasRecord !== true) {
+    findings.push(finding({ code: "EMPLOYMENT_RECORD_REQUIRED", severity: "BLOCKER", owner: "EMPLOYER",
+      title: "No employment record available", explanation: "An EPF employment record is required before final settlement can be evaluated.",
+      allowedActions: ["REVIEW_EMPLOYMENT"] }));
+  } else if (snapshot.employment.isActive) {
+    findings.push(finding({ code: "ACTIVE_EMPLOYMENT_EXISTS", severity: "BLOCKER", owner: "EMPLOYER",
+      title: "Employment is still active", explanation: "The recorded employment has not ended. Review employment details before considering final settlement.",
+      allowedActions: ["REVIEW_EMPLOYMENT"] }));
+  }
+  if (typeof snapshot.postedEpfBalance !== "number" || !Number.isFinite(snapshot.postedEpfBalance) || snapshot.postedEpfBalance <= 0) {
+    findings.push(finding({ code: "NO_WITHDRAWABLE_EPF_BALANCE", severity: "BLOCKER", owner: "EMPLOYER",
+      title: "No posted EPF balance available", explanation: "A positive posted EPF balance is required. Review your contribution history; a zero-value claim cannot be submitted.",
+      allowedActions: ["REVIEW_CONTRIBUTIONS"] }));
+  }
+
   if (snapshot.identity?.activated !== true) {
     findings.push(
       finding({

@@ -9,6 +9,7 @@ import type {
 } from "./types";
 
 export interface MemberSnapshot {
+  claimEligibilityAsOf?: string;
   persona: DemoPersona;
   profile: {
     displayName: string;

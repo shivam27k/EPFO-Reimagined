@@ -43,7 +43,11 @@ export default async function ClaimsPage() {
   const claimAmount = calculateFinalSettlementAmount(snapshot.contributions, displayedClaim);
   const bankRecord = snapshot.kyc.find((record) => record.type === "BANK");
   const exitedEmployment = snapshot.employments.find((employment) => employment.exitedAt);
-  const eligibilityAsOf = snapshot.simulations[0]?.recordedAt.slice(0, 10) ?? demoReferenceDate;
+  const eligibilityAsOf = snapshot.claimEligibilityAsOf ?? snapshot.simulations[0]?.recordedAt.slice(0, 10) ?? demoReferenceDate;
+  const unemploymentBlocker = blockers.find((finding) => [
+    "EMPLOYMENT_RECORD_REQUIRED", "ACTIVE_EMPLOYMENT_EXISTS", "MISSING_EXIT_DATE",
+    "INVALID_EXIT_DATE", "INVALID_UNEMPLOYMENT_REFERENCE_DATE", "TWO_MONTH_UNEMPLOYMENT_NOT_MET",
+  ].includes(finding.code));
   const reviewDetails = {
     bankAccountConfirmed: {
       facts: [
@@ -65,7 +69,7 @@ export default async function ClaimsPage() {
       facts: [
         { label: "Exit date", value: exitedEmployment?.exitedAt ?? "Not recorded" },
         { label: "Eligibility checked as of", value: eligibilityAsOf },
-        { label: "Result", value: "Two-month unemployment requirement completed" },
+        { label: "Result", value: unemploymentBlocker?.title ?? "Two-month unemployment requirement completed" },
       ],
     },
     claimDeclarationAccepted: {
@@ -85,13 +89,17 @@ export default async function ClaimsPage() {
   const latestEvent = snapshot.claimEvents[0];
   const submissionPossible = canSubmit && (!claimStatus || claimStatus === "DRAFT");
   const waitCanBeSimulated = (!claimStatus || claimStatus === "DRAFT") && blockers.length === 1 && blockers[0]?.code === "TWO_MONTH_UNEMPLOYMENT_NOT_MET";
-  const blockerHref = blockers[0]?.code.includes("EXIT_DATE") ? "/employment" : blockers[0]?.owner === "EPFO" ? "/help" : "/profile";
+  const blockerCode = blockers[0]?.code ?? "";
+  const blockerHref = blockerCode === "ONBOARDING_INCOMPLETE" ? "/onboarding"
+    : blockerCode === "NO_WITHDRAWABLE_EPF_BALANCE" ? "/passbook"
+    : blockerCode.includes("EMPLOYMENT") || blockerCode.includes("EXIT_DATE") ? "/employment"
+    : blockers[0]?.owner === "EPFO" ? "/help" : "/profile";
   const primaryAction = claimStatus === "SETTLED"
     ? <Link className="primary-action" href="/services">Choose another service</Link>
     : claimStatus === "REJECTED"
       ? <Link className="primary-action" href="/help">Review claim help</Link>
       : blockers.length && (!claimStatus || claimStatus === "DRAFT") && !waitCanBeSimulated
-        ? <Link className="primary-action" href={blockerHref}>Resolve claim blocker</Link>
+        ? <Link className="primary-action" href={blockerHref}>{blockerCode === "ONBOARDING_INCOMPLETE" ? "Complete your profile" : "Review claim requirement"}</Link>
         : <ClaimActions canSubmit={canSubmit} status={claimStatus} blockerCodes={blockers.map((finding) => finding.code)} reviewDetails={reviewDetails} />;
 
   return (

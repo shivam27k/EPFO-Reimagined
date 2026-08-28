@@ -44,6 +44,9 @@ function workflowAction(workflow: Workflow) {
 }
 
 function findingAction(finding: Finding) {
+  if (finding.code === "ONBOARDING_INCOMPLETE") return { label: "Complete your profile", href: "/onboarding" };
+  if (finding.code === "NO_WITHDRAWABLE_EPF_BALANCE") return { label: "Review contribution history", href: "/passbook" };
+  if (["EMPLOYMENT_RECORD_REQUIRED", "ACTIVE_EMPLOYMENT_EXISTS"].includes(finding.code)) return { label: "Review employment records", href: "/employment" };
   if (finding.code.startsWith("CONTRIBUTION_GAP_")) return { label: "Review recorded contributions", href: "/passbook" };
   if (["MISSING_EXIT_DATE", "INVALID_EXIT_DATE"].includes(finding.code)) return { label: "Review employment exit", href: "/employment" };
   if (["BANK_NAME_MISMATCH", "BANK_NOT_VERIFIED", "PENDING_BANK_CHANGE", "PAN_NAME_MISMATCH", "IDENTITY_NOT_ACTIVATED"].includes(finding.code)) {
@@ -130,9 +133,6 @@ function readiness(snapshot: MemberSnapshot, workflow: Workflow) {
     };
   }
   if (workflow !== "final_settlement") return unknown("NO_READINESS_EVALUATOR", "This workflow has no existing readiness evaluator. Review its manual workflow; eligibility is unknown.");
-  if (snapshot.persona === "NEW_MEMBER" && !snapshot.profile.onboardingComplete && !snapshot.latestClaim && !snapshot.activeClaim) {
-    return unknown("CLAIM_READINESS_NOT_EVALUATED", "Claim readiness has not been evaluated for this unfinished new-member setup.");
-  }
 
   const blockers = snapshot.findings.filter((finding) => finding.severity === "BLOCKER");
   const existingClaim = projectClaim(snapshot.activeClaim);
