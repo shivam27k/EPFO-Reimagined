@@ -1,6 +1,18 @@
-# EPF Sahayak
+### EPF Sahayak — Your AI Guide to Provident Fund Services
 
-EPF Sahayak is an independent, member-facing EPFO experience redesign built for the Build What Moves India hackathon. It uses fictional member records and disclosed mock employer, EPFO, Aadhaar, bank, ECR, and payment events. It has no connection to live government systems.
+EPF Sahayak reimagines the provident fund portal around an AI assistant that guides members from “What should I do?” to “Here’s your next step.”
+
+Instead of expecting users to understand complex terminology or search through multiple menus, the assistant lets them explain their needs naturally through text or voice. Hinglish-first voice conversations make the experience more approachable for people who prefer speaking over navigating forms.
+
+The AI understands the current page, available services, and relevant member information to provide contextual guidance. It explains requirements, identifies missing information, and guides users through supported workflows.
+
+It also helps users operate the portal directly. Simply asking “Open my claims,” “Show my passbook,” or “Scroll to the contribution details” lets the assistant navigate pages, open relevant sections, and scroll to the information they need. Users can move through the portal conversationally instead of searching for every button themselves.
+
+For example, a member asking “Mujhe PF nikalna hai—kya karna padega?” can receive guidance on the relevant options and be taken to the appropriate claim journey. Actions requiring approval remain subject to explicit user confirmation.
+
+Compared with a conventional menu-driven experience, EPF Sahayak reduces the effort of finding services, understanding requirements, and deciding what comes next. Unlike a standalone chatbot, its guidance is connected to the interface and available actions.
+
+The result is an AI companion that does more than answer questions—it helps members understand, navigate, and progress with confidence and control.
 
 ## Start locally
 
