@@ -1,5 +1,5 @@
 import type { ToolResult } from "@/domain/assistant-tools";
-import { assistantRequest, executeVoiceTool, recoverCall, type ObserveUi } from "./assistant-transport";
+import { AssistantRequestError, assistantRequest, executeVoiceTool, recoverCall, type ObserveUi } from "./assistant-transport";
 import { rememberCall } from "./use-assistant-actions";
 
 type Registration = { turnId: string; proposalId: string | null; decision: string | null;
@@ -8,6 +8,7 @@ type Turn = {
   generation: number; itemId: string; route: string; controller: AbortController;
   registered: Promise<Registration | null>; resolve: (value: Registration | null) => void;
   registrationStarted: boolean; attempts: number;
+  registrationFailure?: { code: string; message: string };
 };
 type Call = { call_id: string; name: string; arguments: string };
 type ResponseEvent = { id?: unknown; status?: unknown; output?: unknown };
@@ -66,7 +67,10 @@ export class VoiceToolSession {
     if (!this.current(turn) || (turn.itemId && itemId !== turn.itemId) || turn.registrationStarted) return;
     turn.itemId = itemId;
     turn.registrationStarted = true;
-    if (!text.trim() || text.length > 1000) { turn.resolve(null); return; }
+    if (!text.trim() || text.length > 1000) {
+      turn.registrationFailure = { code: "TRANSCRIPT_INVALID", message: "The transcript was empty or too long. Please repeat a shorter request; no tool was executed." };
+      turn.resolve(null); return;
+    }
     try {
       const registration = await assistantRequest<Registration>("/api/assistant/turns", {
         requestKey: this.sessionId + "_" + itemId, route: turn.route, text,
@@ -76,7 +80,16 @@ export class VoiceToolSession {
         content: [{ type: "input_text", text: "Portal trusted actual-user-turn registration (not model-authored consent): " +
           JSON.stringify(registration) }] } });
       turn.resolve(registration);
-    } catch { turn.resolve(null); }
+    } catch (error) {
+      if (!this.current(turn)) return;
+      turn.registrationFailure = error instanceof AssistantRequestError
+        ? { code: error.code ?? (error.status === 401 ? "AUTHENTICATION_REQUIRED" : "TRANSCRIPT_REGISTRATION_REJECTED"),
+          message: error.status === 401
+            ? "Your portal session has expired. Sign in again before using voice actions; no tool was executed."
+            : "The portal rejected transcript registration. " + error.message + " No tool was executed." }
+        : { code: "TRANSCRIPT_REGISTRATION_UNAVAILABLE", message: "The portal could not register your transcript. Check the connection and try again; no tool was executed." };
+      turn.resolve(null);
+    }
   }
   private async registration(turn: Turn): Promise<Registration | null> {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -131,8 +144,8 @@ export class VoiceToolSession {
             turnId: registered.turnId, callId: call.call_id, name: call.name, arguments: call.arguments,
           }, this.deps.observe, turn.controller.signal, this.deps.onResult)
             : Promise.resolve<ToolResult>({ callId: call.call_id, status: "unavailable", contextVersion: "unavailable",
-              message: "The actual user transcript was not registered in time. Ask the member to repeat; no tool was executed.",
-              error: { code: "TRUSTED_TURN_REQUIRED", retryable: false } });
+              message: turn.registrationFailure?.message ?? "The actual user transcript was not registered in time. Ask the member to repeat; no tool was executed.",
+              error: { code: turn.registrationFailure?.code ?? "TRUSTED_TURN_REQUIRED", retryable: false } });
           this.calls.set(call.call_id, { fingerprint, result: work });
         }
         const result = await work;

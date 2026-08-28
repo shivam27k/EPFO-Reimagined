@@ -53,3 +53,9 @@ docs/
 *.MD
 
 !README.md
+
+# Track only the deployment runbooks, keeping existing private docs ignored.
+!/docs/
+/docs/*
+!/docs/home-server-update.md
+!/docs/home-server-removal.md

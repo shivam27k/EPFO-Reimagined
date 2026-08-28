@@ -3,11 +3,26 @@ import { z } from "zod";
 import { AuthenticationError, requireCurrentRun } from "@/server/auth/session";
 import { ActionError } from "./action-contracts";
 
+function expectedOrigin(request: Request) {
+  const configured = process.env.APP_ORIGIN?.trim();
+  if (!configured) return new URL(request.url).origin;
+  try {
+    const url = new URL(configured);
+    if (!["https:", "http:"].includes(url.protocol) || url.username || url.password ||
+        url.pathname !== "/" || url.search || url.hash) throw new Error("Invalid origin");
+    return url.origin;
+  } catch {
+    throw new ActionError("ORIGIN_CONFIGURATION_INVALID", "The portal public origin is misconfigured. Ask the administrator to correct APP_ORIGIN.");
+  }
+}
+
 export async function requireAssistantRequest(request: Request) {
   const current = await requireCurrentRun();
   const origin = request.headers.get("origin");
-  if ((origin && origin !== new URL(request.url).origin) || request.headers.get("sec-fetch-site") === "cross-site") {
-    throw new ActionError("ORIGIN_REJECTED", "Use the signed-in portal to perform this action.");
+  // Trust an explicit deployment setting, never arbitrary forwarded host headers.
+  const allowedOrigin = expectedOrigin(request);
+  if ((origin && origin !== allowedOrigin) || request.headers.get("sec-fetch-site") === "cross-site") {
+    throw new ActionError("ORIGIN_REJECTED", "This portal address is not authorized. Use the configured portal URL or ask the administrator to check APP_ORIGIN.");
   }
   return current;
 }

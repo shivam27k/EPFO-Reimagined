@@ -4,6 +4,12 @@ import type { AssistantReply } from "@/server/assistant/respond";
 import { captureVisibleScreenText } from "./visible-screen-context";
 
 export type ObserveUi = (request: UiRequest, signal: AbortSignal) => Promise<UiObservation>;
+export class AssistantRequestError extends Error {
+  constructor(message: string, public status: number, public code?: string) {
+    super(message);
+    this.name = "AssistantRequestError";
+  }
+}
 export async function assistantRequest<T>(url: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, { method: body === undefined ? "GET" : "POST", cache: "no-store",
     headers: body === undefined ? undefined : { "content-type": "application/json" },
@@ -12,7 +18,7 @@ export async function assistantRequest<T>(url: string, body?: unknown, signal?: 
   if (!response.ok) {
     const details = Object.entries(value.fieldErrors ?? {}).map(([key, message]) => key + ": " + message);
     if (value.exclusions?.length) details.push("Excluded: " + value.exclusions.join(", "));
-    throw new Error([value.error ?? "The request could not be completed.", ...details].join(" "));
+    throw new AssistantRequestError([value.error ?? "The request could not be completed.", ...details].join(" "), response.status, value.code);
   }
   return value;
 }
