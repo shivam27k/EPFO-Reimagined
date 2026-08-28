@@ -284,6 +284,15 @@ export function useAssistantVoice({
     if (!activeRef.current || typeof event.type !== "string") return;
     resetIdleTimer();
 
+    const acceptSpeech = (itemId: string, text: string, complete = false) => {
+      if (!toolSessionRef.current?.transcriptEvidence(itemId, text, complete)) return;
+      if (outputItemRef.current) {
+        const previous = captionStoreRef.current.get(outputItemRef.current);
+        if (previous?.text) toolSessionRef.current.saveCaption(previous.id, previous.text, true);
+      }
+      setState("LISTENING");
+    };
+
     switch (event.type) {
       case "response.created": {
         const response = event.response as { id?: string; metadata?: unknown } | undefined;
@@ -303,6 +312,7 @@ export function useAssistantVoice({
         if (typeof event.delta !== "string") return;
         const item = upsertCaptionItem(eventItemId(event, "member"), "member");
         if (!item.completed) item.text = appendCaption(item.text, event.delta, "member");
+        acceptSpeech(item.id, item.text);
         publishCaptions();
         break;
       }
@@ -312,7 +322,8 @@ export function useAssistantVoice({
       case "conversation.item.input_audio_transcription.completed": {
         if (typeof event.transcript !== "string") return;
         const item = upsertCaptionItem(eventItemId(event, "member"), "member");
-        if (typeof event.item_id === "string") void toolSessionRef.current?.transcriptCompleted(event.item_id, event.transcript, routeRef.current);
+        acceptSpeech(item.id, event.transcript, true);
+        if (typeof event.item_id === "string") void toolSessionRef.current?.transcriptCompleted(event.item_id, event.transcript);
         item.text = safeCaption(event.transcript, "member");
         item.completed = true;
         publishCaptions();
@@ -350,18 +361,13 @@ export function useAssistantVoice({
         if (typeof event.item_id === "string") toolSessionRef.current?.speechStopped(event.item_id);
         break;
       case "input_audio_buffer.speech_started":
-        if (outputItemRef.current) {
-          const previous = captionStoreRef.current.get(outputItemRef.current);
-          if (previous?.text) toolSessionRef.current?.saveCaption(previous.id, previous.text, true);
-        }
+        // VAD is only a candidate. Keep playing until transcription supplies
+        // speech evidence; a cough must not clear audio or cancel active tools.
         toolSessionRef.current?.speechStarted(typeof event.item_id === "string" ? event.item_id : "", routeRef.current);
         inputItemRef.current = typeof event.item_id === "string" ? event.item_id : "";
-        setTranscript("");
-        setState("LISTENING");
         break;
       case "error":
-        // Server VAD may already have interrupted this response before our
-        // targeted cancellation arrives. This is not a broken voice session.
+        // Generation may finish before our guarded cancellation arrives.
         if ((event.error as { code?: string } | undefined)?.code === "response_cancel_not_active") break;
         fail("Realtime voice needs attention. Retry voice or use text chat.");
         break;
@@ -562,6 +568,7 @@ export function useAssistantVoice({
         setState("LISTENING");
         resetIdleTimer();
         if (reconnecting) void toolSessionRef.current?.recover();
+        else toolSessionRef.current?.greet();
         const visibleText = captureVisibleScreenText();
         const currentKey = contextKey(routeRef.current, contextVersionWithVisibleScreen(
           contextVersionRef.current,

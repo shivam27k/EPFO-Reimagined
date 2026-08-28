@@ -12,6 +12,14 @@ type Turn = {
 };
 type Call = { call_id: string; name: string; arguments: string };
 type ResponseEvent = { id?: unknown; status?: unknown; output?: unknown };
+
+// Evidence for interruption only, never consent or tool authorization. Do not
+// impose a word-count minimum: "stop", "no", and "रुको" must remain valid.
+export function hasSpeechEvidence(text: string): boolean {
+  const spoken = text.replace(/\[[^\]]*(?:\]|$)|\([^)]*(?:\)|$)|<[^>]*(?:>|$)/gu, " ").trim();
+  if (!/\p{L}/u.test(spoken)) return false;
+  return !/^(?:\s|[.,!…-]|cough(?:ing|s)?|sneez(?:e|ing|es)|sigh(?:ing|s)?|breath(?:ing)?|noise|silence|inaudible|unintelligible|achoo)+$/iu.test(spoken);
+}
 type Dependencies = {
   send: (event: Record<string, unknown>) => boolean;
   observe: ObserveUi; onResult: (result: ToolResult, current?: boolean) => void;
@@ -31,12 +39,33 @@ export class VoiceToolSession {
   private queue: Promise<void> = Promise.resolve();
   private activeResponse: string | null = null;
   private transcriptTimer: ReturnType<typeof setTimeout> | null = null;
+  private candidate: { itemId: string; route: string; stopped?: boolean } | null = null;
+  private candidateTimer: ReturnType<typeof setTimeout> | null = null;
+  private greetingRequested = false;
+  private greetingGeneration: number | null = null;
+  private greetingResponse: string | null = null;
   constructor(private deps: Dependencies) {}
+
+  greet() {
+    if (this.greetingRequested || this.turn || this.candidate) return;
+    this.greetingRequested = true;
+    this.greetingGeneration = this.generation;
+    // An isolated, tools-disabled response: never manufacture a user turn or
+    // consent just to announce readiness. Use the negotiated session voice.
+    this.deps.send({ type: "response.create", response: {
+      conversation: "none", input: [], tools: [], tool_choice: "none",
+      metadata: { portal_greeting: this.sessionId + "_" + this.generation },
+      instructions: 'Say only this short greeting, warmly: "नमस्ते! Sahayak तैयार है। बताइए, क्या मदद करूँ?" Do not add anything else.',
+    } });
+  }
 
   private current(turn: Turn | null): turn is Turn {
     return !!turn && turn === this.turn && turn.generation === this.generation && !turn.controller.signal.aborted;
   }
   interrupt() {
+    this.greetingGeneration = null;
+    this.greetingResponse = null;
+    this.clearCandidate();
     if (this.transcriptTimer) clearTimeout(this.transcriptTimer);
     this.transcriptTimer = null;
     this.turn?.controller.abort();
@@ -48,14 +77,47 @@ export class VoiceToolSession {
     this.deps.send({ type: "output_audio_buffer.clear" });
   }
   speechStarted(itemId: string, route: string) {
+    if (!itemId) return;
+    this.clearCandidate();
+    this.candidate = { itemId, route };
+  }
+  private clearCandidate() {
+    if (this.candidateTimer) clearTimeout(this.candidateTimer);
+    this.candidateTimer = null;
+    this.candidate = null;
+  }
+  private discardCandidate() {
+    const itemId = this.candidate?.itemId;
+    this.clearCandidate();
+    // Prevent an ignored noise item from influencing later model responses.
+    if (itemId) this.deps.send({ type: "conversation.item.delete", item_id: itemId });
+  }
+  transcriptEvidence(itemId: string, text: string, complete = false): boolean {
+    const candidate = this.candidate;
+    if (!candidate || candidate.itemId !== itemId || !hasSpeechEvidence(text)) return false;
+    // A partial token such as "sne" may still become a noise annotation. Short
+    // interruption words are accepted without waiting for a trailing space.
+    if (!complete && !/[\s.!?।]$/u.test(text) && !/^(stop|no|wait|बस|रुको|नहीं|बस करो)$/iu.test(text.trim())) return false;
+    const route = candidate.route;
+    const stopped = candidate.stopped;
     this.interrupt();
     let resolve: Turn["resolve"] = () => {};
     const registered = new Promise<Registration | null>((done) => { resolve = done; });
     this.turn = { generation: this.generation, itemId, route, controller: new AbortController(),
       registered, resolve, registrationStarted: false, attempts: 0 };
+    if (stopped) this.speechStopped(itemId);
+    return true;
   }
   responseCreated(responseId: string, metadata?: unknown) {
     if (!responseId) return;
+    const greeting = metadata && typeof metadata === "object"
+      ? (metadata as Record<string, unknown>).portal_greeting : null;
+    if (this.greetingRequested && this.greetingGeneration === this.generation &&
+        greeting === this.sessionId + "_" + this.generation && !this.turn) {
+      this.greetingResponse = responseId;
+      this.activeResponse = responseId;
+      return;
+    }
     // Bind delayed responses to their originating utterance, not newer speech.
     const owner = metadata && typeof metadata === "object"
       ? (metadata as Record<string, unknown>).portal_turn : null;
@@ -68,6 +130,14 @@ export class VoiceToolSession {
     this.activeResponse = responseId;
   }
   speechStopped(itemId: string) {
+    if (this.candidate?.itemId === itemId) {
+      this.candidate.stopped = true;
+      if (this.candidateTimer) clearTimeout(this.candidateTimer);
+      this.candidateTimer = setTimeout(() => {
+        if (this.candidate?.itemId === itemId) this.discardCandidate();
+      }, 15_000);
+      return;
+    }
     const turn = this.turn;
     if (!this.current(turn) || turn.itemId !== itemId || turn.registrationStarted) return;
     if (this.transcriptTimer) clearTimeout(this.transcriptTimer);
@@ -90,6 +160,7 @@ export class VoiceToolSession {
       message: turn.registrationFailure.message, error: { code: turn.registrationFailure.code, retryable: false } });
   }
   transcriptionFailed(itemId: string) {
+    if (this.candidate?.itemId === itemId) { this.discardCandidate(); return; }
     const turn = this.turn;
     if (!this.current(turn) || turn.itemId !== itemId || turn.registrationStarted) return;
     if (this.transcriptTimer) clearTimeout(this.transcriptTimer);
@@ -100,12 +171,19 @@ export class VoiceToolSession {
     this.reportRegistrationFailure(turn);
   }
   acceptsResponse(responseId: unknown) {
-    return typeof responseId !== "string" || this.current(this.responses.get(responseId) ?? null);
+    return typeof responseId !== "string" ||
+      (responseId === this.greetingResponse && this.greetingGeneration === this.generation) ||
+      this.current(this.responses.get(responseId) ?? null);
   }
-  async transcriptCompleted(itemId: string, text: string, route: string) {
+  async transcriptCompleted(itemId: string, text: string) {
     // No synthetic substitute, partial caption or model argument is registered.
-    // A missing speech_started may occur on an already committed audio item.
-    if (!this.turn && !this.responses.size) this.speechStarted(itemId, route);
+    // Only an observed candidate can replace a turn. Late transcripts after
+    // cancellation/reconnection must not resurrect an abandoned utterance.
+    if (this.candidate?.itemId === itemId && !hasSpeechEvidence(text)) {
+      this.discardCandidate();
+      return;
+    }
+    this.transcriptEvidence(itemId, text, true);
     const turn = this.turn;
     if (!this.current(turn) || (turn.itemId && itemId !== turn.itemId) || turn.registrationStarted) return;
     if (this.transcriptTimer) clearTimeout(this.transcriptTimer);
@@ -160,6 +238,7 @@ export class VoiceToolSession {
     const responseId = response.id;
     this.completedBatches.add(responseId);
     if (this.activeResponse === responseId) this.activeResponse = null;
+    if (responseId === this.greetingResponse) return;
     if (response.status !== "completed") return;
     const turn = this.responses.get(responseId) ?? null;
     const calls: Call[] = (Array.isArray(response.output) ? response.output : []).flatMap((value) => {

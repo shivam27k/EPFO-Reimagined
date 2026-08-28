@@ -166,7 +166,8 @@ export function AssistantPanel({
   const documentPrepareEvent = useRef<{ key: string; requestKey: string; callId: string } | null>(null);
   const workspaceView = view ?? internalView;
   const workspaceOpen = workspaceView !== "collapsed";
-  const workspaceModal = modal;
+  const previousWorkspaceOpen = useRef(workspaceOpen);
+  const workspaceModal = modal && workspaceOpen;
   const browserState = useRef<BrowserActionState>({ pathname, modal, voiceActive, utilityPanel, documentOpen });
   useEffect(() => {
     browserState.current = { pathname, modal, voiceActive, utilityPanel, documentOpen };
@@ -231,6 +232,13 @@ export function AssistantPanel({
     cancelWork();
     changeView("collapsed");
   }
+
+  useEffect(() => {
+    if (!workspaceOpen && previousWorkspaceOpen.current) {
+      document.querySelector<HTMLButtonElement>('[aria-label="Ask EPF Sahayak"]')?.focus();
+    }
+    previousWorkspaceOpen.current = workspaceOpen;
+  }, [workspaceOpen]);
 
   function startVoice() {
     cancelWork();
@@ -526,11 +534,14 @@ export function AssistantPanel({
         </aside> : null}
         <button aria-label="Ask EPF Sahayak" className="assistant-launcher assistant-launcher-voice" onClick={openAssistant} type="button"><AudioLines aria-hidden="true" size={22} /><span><strong>Talk to Sahayak</strong><small>Your personal EPF guide</small></span></button>
       </> : null}
-      {workspaceOpen ? <section
+      <section
         aria-label="EPF Sahayak workspace"
+        aria-hidden={!workspaceOpen}
         aria-modal={workspaceModal ? true : undefined}
         className="assistant-workspace"
-        data-view={workspaceView}
+        data-view="docked"
+        data-open={workspaceOpen}
+        inert={!workspaceOpen}
         ref={workspaceRef}
         role={workspaceModal ? "dialog" : "complementary"}
         tabIndex={-1}
@@ -566,7 +577,7 @@ export function AssistantPanel({
           {pending ? <div className="assistant-empty"><Sparkles aria-hidden="true" size={18} /> Checking the masked demo record…</div> : null}
         </div> : null}
         <AssistantActionProgress results={actions.progress} refreshStatus={actions.refreshStatus} />
-        {actions.proposal ? <PersistedActionReview key={actions.proposal.proposalId + ":" + actions.proposal.payloadHash} proposal={actions.proposal} busy={actions.busy} acknowledged={actions.acknowledged} onDisplayed={actions.markDisplayed} onDecision={actions.decide} /> : null}
+        {workspaceOpen && actions.proposal ? <PersistedActionReview key={actions.proposal.proposalId + ":" + actions.proposal.payloadHash} proposal={actions.proposal} busy={actions.busy} acknowledged={actions.acknowledged} onDisplayed={actions.markDisplayed} onDecision={actions.decide} /> : null}
         {actions.error ? <p className="assistant-error" role="alert">{actions.error}</p> : null}
         {panelError ? <p className="assistant-error" role="alert">{panelError}</p> : null}
         {documentOpen ? <section aria-label="Synthetic document review" className="document-assist" id="assistant-document-review"><header className="document-assist-header"><FileSearch aria-hidden="true" size={18} /><span><strong>Review a synthetic document</strong><small>Produces proposals only</small></span><button className="text-action" onClick={cancelDocumentReview} type="button">Cancel review</button></header><form onSubmit={extractDocument}>
@@ -587,7 +598,7 @@ export function AssistantPanel({
             <button className="primary-action" disabled={pending || !input.trim()} type="submit"><Send aria-hidden="true" size={16} /> Send</button>
           </div>
         </form> : null}
-      </section> : null}
+      </section>
     </section>
   );
 }

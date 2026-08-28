@@ -12,7 +12,7 @@ import {
   UserRound,
   UsersRound,
 } from "lucide-react";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -70,6 +70,11 @@ function isCurrentMobileSection(pathname: string, href: string) {
   return mobileSectionRoutes[href]?.some((route) => pathname === route || pathname.startsWith(`${route}/`)) ?? false;
 }
 
+function NavigationPending() {
+  const { pending } = useLinkStatus();
+  return <span aria-hidden="true" className="navigation-pending" data-pending={pending} />;
+}
+
 function NavigationLinks({ mobile = false }: { mobile?: boolean }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -84,6 +89,7 @@ function NavigationLinks({ mobile = false }: { mobile?: boolean }) {
             onPointerEnter={() => prefetch(href)} onFocus={() => prefetch(href)} onTouchStart={() => prefetch(href)}>
             <Icon size={19} aria-hidden="true" />
             <span>{label}</span>
+            <NavigationPending />
           </Link>
         ))}
       </nav>
@@ -103,6 +109,7 @@ function NavigationLinks({ mobile = false }: { mobile?: boolean }) {
                   onPointerEnter={() => prefetch(href)} onFocus={() => prefetch(href)}>
                   <Icon size={18} aria-hidden="true" />
                   <span>{label}</span>
+                  <NavigationPending />
                 </Link>
               );
             })}

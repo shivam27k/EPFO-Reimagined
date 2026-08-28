@@ -20,6 +20,7 @@
 html {
   min-width: 320px;
   background: var(--paper);
+  scrollbar-gutter: stable;
 }
 
 body {
@@ -459,7 +460,8 @@ textarea {
 
 .portal-layout {
   display: grid;
-  grid-template-columns: 256px minmax(0, 1fr);
+  grid-template-columns: 256px minmax(0, 1fr) 0px;
+  overflow-x: clip;
   min-height: 100vh;
   background: #f4f7fb;
 }
@@ -536,6 +538,8 @@ textarea {
 }
 
 .desktop-navigation a {
+  position: relative;
+  transition: background-color 140ms ease, color 140ms ease;
   display: flex;
   min-height: 46px;
   align-items: center;
@@ -4268,7 +4272,7 @@ button.assistant-voice-orb {
 
 /* Docked workspace: help is a quiet live-context rail, never a floating interruption. */
 .portal-layout:has(.portal-utilities[data-assistant-view="docked"]) {
-  grid-template-columns: 256px minmax(0, 1fr) minmax(340px, 360px);
+  grid-template-columns: 256px minmax(0, 1fr) 360px;
 }
 
 .portal-utilities { display: contents; }
@@ -4305,6 +4309,17 @@ button.assistant-voice-orb {
   border-left: 1px solid #71849c;
   background: #ffffff;
   color: var(--ink);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 200ms ease, transform 240ms cubic-bezier(0.2, 0, 0, 1), visibility 0s 240ms;
+}
+
+.assistant-workspace[data-open="true"] {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
 }
 
 .assistant-workspace[data-view="docked"] {
@@ -4313,6 +4328,38 @@ button.assistant-voice-orb {
   grid-column: 3;
   grid-row: 1;
   height: 100vh;
+}
+
+.navigation-pending {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.navigation-pending[data-pending="true"] { opacity: 1; }
+.mobile-navigation a { position: relative; }
+.desktop-navigation a:has(.navigation-pending[data-pending="true"]) {
+  background: #1b3153;
+  color: #fff;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .utility-drawer {
+    transition: opacity 160ms ease, transform 220ms cubic-bezier(0.16, 1, 0.3, 1), visibility 220ms;
+  }
+  .assistant-voice-primary,
+  .assistant-voice-shortcut,
+  .assistant-workspace .icon-action {
+    transition: background-color 140ms ease, border-color 140ms ease;
+  }
 }
 
 .assistant-workspace-header {
@@ -4346,6 +4393,7 @@ button.assistant-voice-orb {
 .assistant-workspace-scroll {
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
 
@@ -4359,7 +4407,13 @@ button.assistant-voice-orb {
 }
 
 @media (min-width: 861px) {
-  .portal-utilities[data-assistant-view="docked"] .assistant-dock {
+  .portal-layout {
+    transition: grid-template-columns 240ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  /* Keep a fixed-width panel in a persistent grid track. The track slides it
+     into view while the page makes room, without squeezing its own text. */
+  .assistant-dock {
     position: sticky;
     top: 0;
     z-index: 1;
@@ -4368,10 +4422,11 @@ button.assistant-voice-orb {
     grid-row: 1;
     height: 100vh;
     min-width: 0;
+    width: 360px;
     flex-direction: column;
   }
 
-  .portal-utilities[data-assistant-view="docked"] .assistant-workspace[data-view="docked"] {
+  .assistant-dock .assistant-workspace[data-view="docked"] {
     position: static;
     z-index: auto;
     flex: 1 1 auto;
@@ -4430,6 +4485,11 @@ button.assistant-voice-orb {
     height: 100dvh;
     border-top: 0;
     border-left: 1px solid #71849c;
+    transform: translateX(calc(100% + 24px));
+  }
+
+  .assistant-workspace[data-view="docked"][data-open="true"] {
+    transform: translateX(0);
   }
 
   .assistant-workspace .assistant-form {
@@ -4438,10 +4498,12 @@ button.assistant-voice-orb {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .portal-layout,
   .assistant-launcher,
   .assistant-workspace,
   .assistant-workspace * {
     scroll-behavior: auto !important;
     transition: none !important;
+    animation: none !important;
   }
 }

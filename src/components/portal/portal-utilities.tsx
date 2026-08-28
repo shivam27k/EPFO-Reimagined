@@ -75,6 +75,11 @@ export function PortalUtilities({ snapshot, assistantWelcomeKey }: { snapshot: M
   const lastTrigger = useRef<HTMLButtonElement | null>(null);
   const refreshController = useRef<AbortController | null>(null);
   const refreshGeneration = useRef(0);
+  const pendingRefresh = useRef<{
+    pathname: string;
+    source: MemberSnapshot;
+    promise: Promise<boolean>;
+  } | null>(null);
   const previousPathname = useRef(pathname);
   const active = utilityState.pathname === pathname ? utilityState.active : null;
   const currentContext = refreshedContext?.pathname === pathname && refreshedContext.source === snapshot
@@ -166,7 +171,7 @@ export function PortalUtilities({ snapshot, assistantWelcomeKey }: { snapshot: M
     });
   }, [active, assistantModal]);
 
-  const refreshUtilitySnapshot = useCallback(async () => {
+  const fetchUtilitySnapshot = useCallback(async () => {
     const controller = new AbortController();
     const generation = ++refreshGeneration.current;
     refreshController.current?.abort();
@@ -203,10 +208,25 @@ export function PortalUtilities({ snapshot, assistantWelcomeKey }: { snapshot: M
     }
   }, [pathname, snapshot]);
 
+  const refreshUtilitySnapshot = useCallback((sharePending = false): Promise<boolean> => {
+    const pending = pendingRefresh.current;
+    if (sharePending && pending?.pathname === pathname && pending.source === snapshot) {
+      return pending.promise;
+    }
+    // UI reads may share an in-flight request. Post-write refreshes (the default)
+    // replace it so pre-mutation data cannot satisfy a fresh readback.
+    const promise = fetchUtilitySnapshot();
+    pendingRefresh.current = { pathname, source: snapshot, promise };
+    void promise.finally(() => {
+      if (pendingRefresh.current?.promise === promise) pendingRefresh.current = null;
+    });
+    return promise;
+  }, [fetchUtilitySnapshot, pathname, snapshot]);
+
   useEffect(() => {
     if (previousPathname.current === pathname) return;
     previousPathname.current = pathname;
-    void refreshUtilitySnapshot();
+    void refreshUtilitySnapshot(true);
   }, [pathname, refreshUtilitySnapshot]);
 
   useEffect(() => () => {
@@ -216,7 +236,7 @@ export function PortalUtilities({ snapshot, assistantWelcomeKey }: { snapshot: M
 
   function toggle(next: ActiveUtility, trigger?: HTMLButtonElement) {
     if (trigger) lastTrigger.current = trigger;
-    if (active !== next) void refreshUtilitySnapshot();
+    if (active !== next) void refreshUtilitySnapshot(true);
     setUtilityState((current) => {
       const currentActive = current.pathname === pathname ? current.active : null;
       return { pathname, active: currentActive === next ? null : next };
@@ -231,12 +251,12 @@ export function PortalUtilities({ snapshot, assistantWelcomeKey }: { snapshot: M
     if (voiceActive || assistantModal) return false;
     const next: ActiveUtility = panel === "demo" ? "scenarios" : "journey";
     setUtilityState({ pathname, active: next });
-    void refreshUtilitySnapshot();
+    void refreshUtilitySnapshot(true);
     return true;
   }
 
   function changeAssistantView(view: AssistantWorkspaceView) {
-    if (view === "docked" && assistantView === "collapsed") void refreshUtilitySnapshot();
+    if (view === "docked" && assistantView === "collapsed") void refreshUtilitySnapshot(true);
     setAssistantViewOverride(view);
     persistAssistantWorkspaceView(view);
   }
