@@ -4268,7 +4268,7 @@ button.assistant-voice-orb {
 
 /* Docked workspace: help is a quiet live-context rail, never a floating interruption. */
 .portal-layout:has(.portal-utilities[data-assistant-view="docked"]) {
-  grid-template-columns: 256px minmax(0, 1fr) minmax(360px, 420px);
+  grid-template-columns: 256px minmax(0, 1fr) minmax(340px, 360px);
 }
 
 .portal-utilities { display: contents; }

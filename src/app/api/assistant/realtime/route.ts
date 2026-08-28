@@ -1,5 +1,5 @@
 import { AuthenticationError, requireCurrentRun } from "@/server/auth/session";
-import { buildRealtimeSessionConfig, createRealtimeCall } from "@/server/assistant/realtime";
+import { buildRealtimeSessionConfig, createRealtimeCall, RealtimeSetupError } from "@/server/assistant/realtime";
 import { z, ZodError } from "zod";
 
 const SDP_MEDIA_TYPE = "application/sdp";
@@ -59,8 +59,9 @@ function routeFailure(error: unknown) {
   if (error instanceof AuthenticationError) {
     return Response.json({ error: "Authentication required." }, { status: 401 });
   }
+  const code = error instanceof RealtimeSetupError ? error.code : "VOICE_SETUP_FAILED";
   return Response.json(
-    { error: "Realtime voice is temporarily unavailable. Text chat remains available." },
+    { error: "Realtime voice is temporarily unavailable. Text chat remains available.", code },
     { status: 503 },
   );
 }

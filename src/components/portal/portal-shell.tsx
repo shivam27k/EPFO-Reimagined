@@ -12,9 +12,11 @@ import {
 export function PortalShell({
   children,
   snapshot,
+  assistantWelcomeKey,
 }: {
   children: React.ReactNode;
   snapshot: MemberSnapshot;
+  assistantWelcomeKey?: string;
 }) {
   return (
     <div className="portal-layout">
@@ -59,7 +61,7 @@ export function PortalShell({
         </main>
       </div>
 
-      <PortalUtilities snapshot={snapshot} />
+      <PortalUtilities key={assistantWelcomeKey} snapshot={snapshot} assistantWelcomeKey={assistantWelcomeKey} />
       <MobileNavigation />
     </div>
   );

@@ -47,7 +47,7 @@ function readServerResponsiveAssistant() {
   return false;
 }
 
-export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
+export function PortalUtilities({ snapshot, assistantWelcomeKey }: { snapshot: MemberSnapshot; assistantWelcomeKey?: string }) {
   const pathname = usePathname();
   const [utilityState, setUtilityState] = useState<{ pathname: string; active: ActiveUtility | null }>({
     pathname,
@@ -298,6 +298,7 @@ export function PortalUtilities({ snapshot }: { snapshot: MemberSnapshot }) {
 
       <div className="assistant-dock">
         <AssistantPanel
+          welcomeKey={assistantWelcomeKey}
           contextStale={contextStale}
           utilityPanel={active === "scenarios" ? "demo" : active}
           onOpenUtility={openAssistantUtility}

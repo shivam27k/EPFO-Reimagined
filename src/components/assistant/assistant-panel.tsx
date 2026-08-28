@@ -1,6 +1,8 @@
 "use client";
 
-import { Bot, ChevronLeft, ChevronRight, FileSearch, Mic, PanelRightClose, Paperclip, Send, Sparkles } from "lucide-react";
+import "./voice-welcome.css";
+
+import { AudioLines, ArrowDown, Compass, ChevronLeft, ChevronRight, FileSearch, Mic, PanelRightClose, Paperclip, Send, Sparkles, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -104,6 +106,7 @@ async function readJson(response: Response) {
 
 export function AssistantPanel({
   snapshot,
+  welcomeKey,
   view,
   onViewChange,
   contextStale = false,
@@ -115,6 +118,7 @@ export function AssistantPanel({
   onRefreshContext,
 }: {
   snapshot: MemberSnapshot;
+  welcomeKey?: string;
   view?: AssistantWorkspaceView;
   onViewChange?: (view: AssistantWorkspaceView) => void;
   contextStale?: boolean;
@@ -136,6 +140,9 @@ export function AssistantPanel({
   const validationCounts = useRef<Record<string, number>>({});
   const [internalView, setInternalView] = useState<AssistantWorkspaceView>("collapsed");
   const [voiceActive, setVoiceActive] = useState(false);
+  const [textMode, setTextMode] = useState(false);
+  const [welcomeVisible, setWelcomeVisible] = useState(false);
+  const welcomeInitialized = useRef<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [dismissed, setDismissed] = useState<string[]>([]);
   const [input, setInput] = useState("");
@@ -193,7 +200,30 @@ export function AssistantPanel({
     else setInternalView(nextView);
   }, [onViewChange]);
 
+  useEffect(() => {
+    if (!welcomeKey || welcomeInitialized.current === welcomeKey) return;
+    welcomeInitialized.current = welcomeKey;
+    let seen = false;
+    try { seen = sessionStorage.getItem("epf-sahayak:voice-welcome") === welcomeKey; } catch { /* Storage may be unavailable. */ }
+    if (!seen) { setWelcomeVisible(true); changeView("collapsed"); }
+  }, [welcomeKey, changeView]);
+
+  function dismissWelcome() {
+    setWelcomeVisible(false);
+    if (welcomeKey) {
+      try { sessionStorage.setItem("epf-sahayak:voice-welcome", welcomeKey); } catch { /* Keep the in-memory dismissal. */ }
+    }
+  }
+
+  function openText() {
+    dismissWelcome();
+    setTextMode(true);
+    changeView("docked");
+    requestAnimationFrame(() => document.getElementById("assistant-message")?.focus());
+  }
+
   function openAssistant() {
+    dismissWelcome();
     changeView("docked");
   }
 
@@ -211,6 +241,7 @@ export function AssistantPanel({
     cancelWork();
     if (captions.length > 0) setMessages((current) => [...current, ...captions]);
     setVoiceActive(false);
+    setTextMode(true);
     void actions.reload();
   }
 
@@ -333,12 +364,14 @@ export function AssistantPanel({
   function chooseGuidance(prompt: ProactivePromptModel, mode: "ONE_BY_ONE" | "REVIEW_ALL") {
     if (!prompt.processKey) return;
     setGuidance({ processKey: prompt.processKey, mode, position: 0 });
+    setTextMode(true);
     openAssistant();
   }
 
   async function sendMessage(message: string, signal?: AbortSignal): Promise<{ text: string } | null> {
     const trimmed = message.trim();
     if (!trimmed || signal?.aborted) return null;
+    setTextMode(true);
     setInput(""); setPending(true); setPanelError("");
     if (!voiceActive) openAssistant();
     setMessages((current) => [...current, { role: "member", text: trimmed }]);
@@ -483,7 +516,16 @@ export function AssistantPanel({
 
   return (
     <section className="assistant-area" aria-label="EPF Sahayak assistant" data-context-stale={contextStale}>
-      {workspaceView === "collapsed" && !voiceActive ? <button aria-label="Ask EPF Sahayak" className="assistant-launcher" onClick={openAssistant} title="Ask EPF Sahayak" type="button"><Bot aria-hidden="true" size={22} /></button> : null}
+      {workspaceView === "collapsed" && !voiceActive ? <>
+        {welcomeVisible && !suppressPrompt ? <aside className="assistant-welcome" aria-label="Meet your voice guide">
+          <button className="assistant-welcome-dismiss" aria-label="Dismiss voice welcome" onClick={dismissWelcome} type="button"><X size={18} aria-hidden="true" /></button>
+          <p className="utility-label">Meet your voice guide</p><h3>Just ask. I’ll guide you.</h3>
+          <p>Speak in natural language. I can explain your next step, open sections and scroll for you.</p>
+          <button className="assistant-voice-primary" onClick={() => { setTextMode(false); openAssistant(); }} type="button"><AudioLines size={20} aria-hidden="true" />Explore with voice <span aria-hidden="true">→</span></button>
+          <button className="assistant-type-link" onClick={openText} type="button">I’d rather type</button>
+        </aside> : null}
+        <button aria-label="Ask EPF Sahayak" className="assistant-launcher assistant-launcher-voice" onClick={openAssistant} type="button"><AudioLines aria-hidden="true" size={22} /><span><strong>Talk to Sahayak</strong><small>Your personal EPF guide</small></span></button>
+      </> : null}
       {workspaceOpen ? <section
         aria-label="EPF Sahayak workspace"
         aria-modal={workspaceModal ? true : undefined}
@@ -497,14 +539,25 @@ export function AssistantPanel({
         <div className="assistant-context-strip"><span className="utility-label">Current page</span><strong>{pageName(pathname)}</strong><span className={contextStale ? "assistant-context-status is-stale" : "assistant-context-status"}>{contextStale ? "Context refresh failed; showing the last verified demo record." : "Masked context verified for this demo."}</span></div>
         <p className="assistant-boundary">Guidance only. Never enter real Aadhaar, UAN, PAN, bank, OTP, biometric, or government data.</p>
         <div aria-label="EPF Sahayak workspace content" className="assistant-workspace-scroll" role="region">
-        {!voiceActive && guidance && definition ? <section className="question-guidance">
+        {!voiceActive && !textMode ? <section className="assistant-voice-welcome" aria-label="Start with voice">
+          <span className="assistant-voice-recommend">Recommended · Voice guide</span>
+          <div className="assistant-welcome-orb"><Mic size={30} aria-hidden="true" /></div>
+          <h3>Aap boliye.<br />I’ll help you from here.</h3>
+          <p>Ask a question or tell me where to go.<br />No need to find every button.</p>
+          <button className="assistant-voice-primary" disabled={pending} onClick={startVoice} type="button"><Mic size={20} aria-hidden="true" />Start voice conversation</button>
+          <small>Your microphone starts only when you choose.</small>
+          <div className="assistant-voice-examples"><p className="utility-label">You can say</p><p><Compass size={17} aria-hidden="true" />“Mujhe next kya karna hai?”</p><p><PanelRightClose size={17} aria-hidden="true" />“Open my passbook.”</p><p><ArrowDown size={17} aria-hidden="true" />“Scroll to my contributions.”</p></div>
+          <button className="assistant-type-link" onClick={openText} type="button">Prefer typing? Open text chat</button>
+        </section> : null}
+        {!voiceActive && textMode ? <button className="assistant-voice-shortcut" onClick={startVoice} disabled={pending} type="button"><AudioLines size={18} aria-hidden="true" />Want hands-free help? Start voice</button> : null}
+        {!voiceActive && textMode && guidance && definition ? <section className="question-guidance">
           <div className="question-guidance-heading"><div><span className="utility-label">{definition.title}</span><h3>{definition.questions.length} questions in total</h3></div><button className="text-action" onClick={() => setGuidance(null)} type="button">End guide</button></div>
           {guidance.mode === "ONE_BY_ONE" ? <article><strong>{definition.questions[guidance.position]?.label}</strong><p>{definition.questions[guidance.position]?.explanation}</p><small>Question {guidance.position + 1} of {definition.questions.length}</small></article> : currentBatch ? <div className="question-batch"><p className="utility-label">Batch {currentBatch.index} of {batches.length} · {currentBatch.remainingAfter} remaining after this batch</p><ol>{currentBatch.questions.map((question) => <li key={question.key}><strong>{question.label}</strong><span>{question.explanation}</span></li>)}</ol></div> : null}
           <div className="guidance-controls"><button className="secondary-action" disabled={guidance.position === 0} onClick={() => setGuidance({ ...guidance, position: guidance.position - 1 })} type="button"><ChevronLeft aria-hidden="true" size={17} /> Previous question</button><button className="primary-action" disabled={guidance.position >= maxPosition} onClick={() => setGuidance({ ...guidance, position: guidance.position + 1 })} type="button">Next question <ChevronRight aria-hidden="true" size={17} /></button></div>
         </section> : null}
-        {!voiceActive ? <div className="assistant-suggestions" aria-label="Suggested questions">{suggestions.map((suggestion) => <button disabled={pending} key={suggestion} onClick={() => sendMessage(suggestion)} type="button">{suggestion}</button>)}</div> : null}
-        {voiceActive ? <AssistantVoiceControl active contextVersion={voiceContextVersion} documentOpen={documentOpen} onExit={() => { cancelWork(); setVoiceActive(false); }} onReturnToText={returnToText} onToggleDocument={() => setDocumentOpen((current) => !current)} onUiRequest={handleUiRequest} onToolResult={handleVoiceResult} cancellationVersion={cancellationVersion} route={pathname} /> : null}
-        {!voiceActive ? <div className="assistant-thread" aria-busy={pending || historyLoading} aria-label="EPF Sahayak conversation" aria-live="polite" role="region">
+        {!voiceActive && textMode ? <div className="assistant-suggestions" aria-label="Suggested questions">{suggestions.map((suggestion) => <button disabled={pending} key={suggestion} onClick={() => sendMessage(suggestion)} type="button">{suggestion}</button>)}</div> : null}
+        {voiceActive ? <AssistantVoiceControl active contextVersion={voiceContextVersion} documentOpen={documentOpen} onExit={() => { cancelWork(); setVoiceActive(false); setTextMode(false); }} onReturnToText={returnToText} onToggleDocument={() => setDocumentOpen((current) => !current)} onUiRequest={handleUiRequest} onToolResult={handleVoiceResult} cancellationVersion={cancellationVersion} route={pathname} /> : null}
+        {!voiceActive && textMode ? <div className="assistant-thread" aria-busy={pending || historyLoading} aria-label="EPF Sahayak conversation" aria-live="polite" role="region">
           {visiblePrompt && !suppressPrompt ? <ProactivePrompt prompt={visiblePrompt} onDismiss={() => dismissPrompt(visiblePrompt)} onChooseGuidance={(mode) => chooseGuidance(visiblePrompt, mode)} /> : null}
           {historyLoading ? <div className="assistant-empty"><Sparkles aria-hidden="true" size={18} /> Loading this run’s conversation…</div> : null}
           {!historyLoading && messages.length === 0 ? <div className="assistant-empty">Ask about this page, a status, or the safest next action.</div> : null}
@@ -523,7 +576,7 @@ export function AssistantPanel({
           <button className="secondary-action" disabled={extractionPending || !syntheticAccepted} type="submit">{extractionPending ? "Reviewing…" : "Create review proposals"}</button>
         </form>{extractionMessage ? <p className="extraction-feedback" role="status">{extractionMessage}</p> : null}{proposals.length > 0 ? pathname === "/onboarding" && snapshot.persona === "NEW_MEMBER" ? <><div className="patch-scope" aria-label="Apply scope"><button aria-pressed={patchScope === "FIELD"} disabled={extractionPending} onClick={() => setPatchScope("FIELD")} type="button">One field</button><button aria-pressed={patchScope === "SECTION"} disabled={extractionPending} onClick={() => setPatchScope("SECTION")} type="button">This section</button><button aria-pressed={patchScope === "WHOLE_FORM"} disabled={extractionPending} onClick={() => setPatchScope("WHOLE_FORM")} type="button">All extracted</button></div><FormPatchReview proposals={scopedProposals} scope={patchScope} prepareOnly pending={patchPending || extractionPending} onConfirm={applyPatch} onCancel={cancelDocumentReview} /></> : <section aria-label="Review extracted document" className="document-review-only"><div className="patch-list">{proposals.map((proposal) => <article className="patch-row" key={proposal.field}><div className="patch-heading"><strong>{proposal.label}</strong><span data-validation={proposal.validation}>{proposal.validation === "VALID" ? "Reviewed" : "Check value"}</span></div><dl><div><dt>Existing</dt><dd>{proposal.existingValue || "Not saved"}</dd></div><div><dt>Proposed</dt><dd>{proposal.sensitive ? "•••• " : ""}{proposal.proposedValue}</dd></div><div><dt>Source</dt><dd>{proposal.source}</dd></div><div><dt>Confidence</dt><dd>{Math.round(proposal.confidence * 100)}%</dd></div></dl></article>)}</div><p className="document-review-guidance">I can review this synthetic document here. Open new-member setup before applying extracted values to a form.</p></section> : null}</section> : null}
         </div>
-        {!voiceActive ? <form className="assistant-form" onSubmit={(event) => { event.preventDefault(); sendMessage(input); }}>
+        {!voiceActive && textMode ? <form className="assistant-form" onSubmit={(event) => { event.preventDefault(); sendMessage(input); }}>
           <label htmlFor="assistant-message">Ask EPF Sahayak</label>
           <textarea id="assistant-message" onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(input); } }} placeholder="Why is this blocked?" rows={2} value={input} />
           <div className="assistant-form-actions">

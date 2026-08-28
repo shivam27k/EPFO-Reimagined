@@ -451,10 +451,14 @@ export function useAssistantVoice({
       return;
     }
 
-    setupTimerRef.current = setTimeout(() => {
-      if (!activeRef.current || generation !== generationRef.current) return;
-      fail("Voice connection did not finish within 15 seconds. Open text chat or retry voice.");
-    }, SETUP_TIMEOUT_MS);
+    const armSetupTimer = (message: string, milliseconds = SETUP_TIMEOUT_MS) => {
+      clearSetupTimer();
+      setupTimerRef.current = setTimeout(() => {
+        if (!activeRef.current || generation !== generationRef.current) return;
+        fail(message);
+      }, milliseconds);
+    };
+    armSetupTimer("Microphone capture did not start. Check browser and system microphone access, then retry or use text chat.", 30_000);
 
     let microphone: MediaStream | null = null;
     let peer: RTCPeerConnection | null = null;
@@ -491,6 +495,8 @@ export function useAssistantVoice({
         microphone.getTracks().forEach((track) => track.stop());
         return;
       }
+
+      armSetupTimer("The browser could not prepare the voice connection. Retry voice or use text chat.");
 
       peer = new RTCPeerConnection();
       audio = new Audio();
@@ -566,16 +572,32 @@ export function useAssistantVoice({
       if (!offerSdp) throw new Error("EMPTY_OFFER");
       const negotiatedRoute = routeRef.current;
       const negotiatedContextKey = contextKey(negotiatedRoute, contextVersionRef.current);
+      armSetupTimer("The portal did not finish voice setup within 20 seconds. Retry voice or use text chat.", 20_000);
       const response = await fetch(`/api/assistant/realtime?route=${encodeURIComponent(negotiatedRoute)}`, {
         method: "POST",
         headers: { "content-type": "application/sdp" },
         body: offer.sdp,
         signal: negotiation.signal,
       });
-      if (!response.ok) throw new Error(response.status === 401 ? "AUTHENTICATION_REQUIRED" : "NEGOTIATION_FAILED");
+      if (!response.ok) {
+        const failure = await response.json().catch(() => null) as { code?: unknown } | null;
+        const messages: Record<string, string> = {
+          VOICE_NOT_CONFIGURED: "Voice is not configured on this server. Ask the administrator to check its API key.",
+          VOICE_PROVIDER_TIMEOUT: "The voice provider did not respond in time. Retry shortly or use text chat.",
+          VOICE_PROVIDER_UNREACHABLE: "The server could not reach the voice provider. Check its network connection or use text chat.",
+          VOICE_CAPACITY_UNAVAILABLE: "Voice is temporarily unavailable. Please try again shortly or continue with text chat.",
+          VOICE_PROVIDER_REJECTED: "Voice could not start right now. Please try again later or continue with text chat.",
+          VOICE_SETUP_FAILED: "This voice session could not be prepared. Please retry or continue with text chat.",
+        };
+        if (!activeRef.current || generation !== generationRef.current) return;
+        fail(response.status === 401 ? "Voice session could not authenticate. Please sign in again or use text chat."
+          : messages[typeof failure?.code === "string" ? failure.code : ""] ?? "The portal returned a voice setup error. Retry or use text chat.");
+        return;
+      }
       const answerSdp = await response.text();
       if (!answerSdp.trim()) throw new Error("EMPTY_ANSWER");
       if (!activeRef.current || generation !== generationRef.current) return;
+      armSetupTimer("Voice setup reached the provider, but the browser audio connection did not open within 15 seconds. Check your network or try another browser.");
       await registeredPeer.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: answerSdp }));
       if (!appliedContextKeyRef.current) appliedContextKeyRef.current = negotiatedContextKey;
     } catch (caught) {
@@ -583,6 +605,8 @@ export function useAssistantVoice({
       if (!activeRef.current || generation !== generationRef.current) return;
       if (isPermissionDenied(caught)) {
         fail("Microphone permission was denied. Allow it in your browser settings, then retry.");
+      } else if (caught instanceof DOMException && ["NotFoundError", "NotReadableError"].includes(caught.name)) {
+        fail("The microphone is missing or unavailable. Check the selected input device and whether another application is using it, then retry.");
       } else if (caught instanceof Error && caught.message === "AUTHENTICATION_REQUIRED") {
         fail("Voice session could not authenticate. Please sign in again or use text chat.");
       } else if (reconnecting) {

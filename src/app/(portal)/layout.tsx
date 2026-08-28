@@ -23,5 +23,5 @@ export default async function PortalLayout({ children }: { children: React.React
 
   const snapshot = await getCachedMemberSnapshot(demoRunId);
 
-  return <PortalShell snapshot={snapshot}>{children}</PortalShell>;
+  return <PortalShell snapshot={snapshot} assistantWelcomeKey={demoRunId}>{children}</PortalShell>;
 }

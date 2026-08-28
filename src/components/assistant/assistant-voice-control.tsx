@@ -81,8 +81,8 @@ export function AssistantVoiceControl(props: AssistantVoiceControlProps) {
         {voice.error ? <p role="alert">{voice.error}</p> : null}
       </div>
       <div aria-label="Voice controls" className="assistant-voice-controls" role="group">
-        {onToggleDocument ? <button aria-controls="assistant-document-review" aria-expanded={documentOpen} aria-label="Attach synthetic document" className="assistant-voice-icon-action" disabled={!active} onClick={onToggleDocument} title="Attach synthetic document" type="button"><Paperclip aria-hidden="true" size={19} /><span>Attach</span></button> : null}
-        <button aria-label="Open text chat" className="assistant-voice-icon-action" disabled={!active} onClick={returnToText} title="Open text chat" type="button"><Keyboard aria-hidden="true" size={19} /><span>Text</span></button>
+        {onToggleDocument ? <button aria-controls="assistant-document-review" aria-expanded={documentOpen} aria-label="Attach synthetic document" className="assistant-voice-icon-action" disabled={!active} onClick={onToggleDocument} title="Attach synthetic document" type="button"><Paperclip aria-hidden="true" size={19} /><span>Attach file</span></button> : null}
+        <button aria-label="Continue in text chat" className="assistant-voice-icon-action" disabled={!active} onClick={returnToText} title="Continue in text chat" type="button"><Keyboard aria-hidden="true" size={19} /><span>Use text</span></button>
         <button aria-label="End voice mode" className="assistant-voice-icon-action assistant-voice-icon-end" disabled={!active} onClick={exit} title="End voice mode" type="button"><X aria-hidden="true" size={19} /><span>End</span></button>
       </div>
     </section>

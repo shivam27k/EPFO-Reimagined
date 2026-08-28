@@ -14,8 +14,13 @@ const REALTIME_TRANSCRIPTION_PROMPT = [
   "Write English in Latin script and Hindi in Devanagari; never use Urdu or Arabic script.",
   "EPF terms include EPF, EPS, EPFO, UAN, KYC, Aadhaar, passbook, contribution, employer, claim, Form 19, Form 31, Form 10C, Form 10D, and Annexure K.",
 ].join(" ");
-const REALTIME_CONFIGURATION_ERROR = "Realtime voice service is not configured.";
 const REALTIME_NEGOTIATION_ERROR = "Realtime call negotiation failed.";
+
+export class RealtimeSetupError extends Error {
+  constructor(public code: string, public upstreamStatus?: number, public providerCode?: string, public parameter?: string) {
+    super(code);
+  }
+}
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -41,7 +46,7 @@ function redactRealtimeConversation(text: string, demoRunId: string): string {
 
 function requireApiKey(): string {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) throw new Error(REALTIME_CONFIGURATION_ERROR);
+  if (!apiKey) throw new RealtimeSetupError("VOICE_NOT_CONFIGURED");
   return apiKey;
 }
 
@@ -176,13 +181,29 @@ export async function createRealtimeCall({
   form.set("sdp", sdp);
   form.set("session", JSON.stringify(config));
 
-  const response = await fetch(REALTIME_CALLS_URL, {
-    method: "POST",
-    headers: { authorization: `Bearer ${requireApiKey()}` },
-    body: form,
-  });
+  const apiKey = requireApiKey();
+  let response: Response;
+  try {
+    response = await fetch(REALTIME_CALLS_URL, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal: AbortSignal.timeout(12_000),
+    });
+  } catch (error) {
+    throw new RealtimeSetupError(error instanceof Error && error.name === "TimeoutError" ? "VOICE_PROVIDER_TIMEOUT" : "VOICE_PROVIDER_UNREACHABLE");
+  }
 
-  if (!response.ok) throw new Error(REALTIME_NEGOTIATION_ERROR);
+  if (!response.ok) {
+    // Never log provider messages, request bodies, SDP, headers or credentials.
+    const body = asRecord(await response.json().catch(() => null));
+    const detail = asRecord(body.error);
+    const knownCodes = ["model_not_found", "invalid_api_key", "insufficient_quota", "rate_limit_exceeded", "invalid_value", "unknown_parameter", "unsupported_parameter", "invalid_request_error"];
+    const knownParameters = ["model", "session.model", "parallel_tool_calls", "session.parallel_tool_calls", "audio.input.transcription.model", "session.audio.input.transcription.model", "audio.output.voice", "session.audio.output.voice", "tools", "session.tools", "sdp"];
+    throw new RealtimeSetupError(response.status === 429 ? "VOICE_CAPACITY_UNAVAILABLE" : "VOICE_PROVIDER_REJECTED", response.status,
+      knownCodes.includes(String(detail.code)) ? String(detail.code) : "other",
+      knownParameters.includes(String(detail.param)) ? String(detail.param) : "other");
+  }
   const answerSdp = await response.text();
   if (!answerSdp.trim()) throw new Error(REALTIME_NEGOTIATION_ERROR);
 
