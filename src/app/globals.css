@@ -2088,6 +2088,17 @@ textarea {
   margin-bottom: 24px;
 }
 
+.mark-exit-page-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mark-exit-page-actions .secondary-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .mark-exit-form {
   display: grid;
   gap: 22px;
@@ -3442,6 +3453,14 @@ textarea {
 .assistant-action-card > p { margin: 3px 0 10px; color: #52647a; font-size: .75rem; }
 .assistant-action-card > div { display: flex; gap: 8px; }
 .assistant-action-card button { min-height: 44px; }
+.assistant-action-card dl { display: grid; gap: 8px; margin: 10px 0; }
+.assistant-action-card dl > div { display: grid; grid-template-columns: minmax(92px, .75fr) minmax(0, 1.25fr); gap: 10px; }
+.assistant-action-card dt { color: #64748b; font-size: .7rem; font-weight: 700; }
+.assistant-action-card dd { min-width: 0; margin: 0; color: var(--ink); font-size: .76rem; overflow-wrap: anywhere; }
+.assistant-action-card-compact { margin: 12px 16px 16px; padding: 13px; }
+.assistant-action-card-compact > strong { display: block; line-height: 1.35; }
+.assistant-action-card-compact > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.assistant-action-card-compact button { width: 100%; padding-inline: 12px; }
 .assistant-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--line); background: #fff; }
 .assistant-form label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .assistant-form textarea { min-width: 0; min-height: 44px; padding: 9px 11px; border: 1px solid #8798ac; font: inherit; resize: none; }
@@ -3913,6 +3932,10 @@ textarea {
   flex-direction: column;
 }
 
+.assistant-workspace-scroll[data-voice-active="true"] {
+  display: block;
+}
+
 .assistant-voice-control {
   position: relative;
   display: flex;
@@ -3926,6 +3949,11 @@ textarea {
   color: var(--ink);
 }
 
+.assistant-workspace-scroll[data-voice-active="true"] .assistant-voice-control {
+  min-height: 0;
+  padding: 16px 16px 14px;
+}
+
 .assistant-voice-stage {
   display: flex;
   flex: 1 1 auto;
@@ -3935,6 +3963,11 @@ textarea {
   justify-content: center;
   gap: 12px;
   text-align: center;
+}
+
+.assistant-workspace-scroll[data-voice-active="true"] .assistant-voice-stage {
+  min-height: 190px;
+  padding-bottom: 8px;
 }
 
 .assistant-voice-eyebrow {
@@ -4008,10 +4041,12 @@ button.assistant-voice-orb {
 
 .assistant-voice-caption {
   flex: none;
-  max-height: 34%;
+  max-height: 120px;
   overflow-y: auto;
-  padding: 4px 8px;
-  background: transparent;
+  padding: 10px 12px;
+  border: 1px solid #d8e2ed;
+  border-radius: 10px;
+  background: #f7fafc;
 }
 
 .assistant-voice-caption p {
@@ -4039,7 +4074,7 @@ button.assistant-voice-orb {
   display: flex;
   flex: none;
   justify-content: center;
-  gap: 24px;
+  gap: 18px;
   padding-top: 14px;
 }
 

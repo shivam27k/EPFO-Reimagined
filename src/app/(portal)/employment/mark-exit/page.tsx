@@ -1,3 +1,6 @@
+import { ArrowLeft } from "lucide-react";
+import Link from "next/link";
+
 import { MarkExitForm } from "@/components/employment/mark-exit-form";
 import { TaskPageHeader } from "@/components/ui/task-first";
 import { getCachedCurrentRun as requireCurrentRun } from "@/server/auth/session";
@@ -20,6 +23,9 @@ export default async function MarkExitPage() {
         officialTerm="Member-side Mark Exit"
         status={{ label: openEmployments.length > 0 ? "Exit update in progress" : "No exit update needed", tone: openEmployments.length > 0 ? "active" : "complete" }}
       />
+      <div className="mark-exit-page-actions">
+        <Link className="secondary-action" href="/employment"><ArrowLeft aria-hidden="true" size={16} />View employment</Link>
+      </div>
       <aside className="prototype-notice"><strong>Demo boundary</strong><p>This updates only the current isolated demo run. It does not contact EPFO, UIDAI, an employer or an Aadhaar-linked mobile number.</p></aside>
       <MarkExitForm employments={openEmployments} />
     </div>

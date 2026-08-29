@@ -11,6 +11,7 @@ import {
   type AssistantValidationEventDetail,
 } from "@/domain/assistant-events";
 import type { MemberSnapshot } from "@/domain/member-snapshot";
+import type { PersistedProposal } from "@/domain/assistant-proposals";
 import { destinationRoutes } from "@/domain/portal-actions";
 import { toolResultSchema, type ToolResult } from "@/domain/assistant-tools";
 import type { UiRequest } from "@/domain/assistant-ui";
@@ -184,7 +185,12 @@ export function AssistantPanel({
     router.refresh();
     return onRefreshContext ? onRefreshContext() : false;
   }, [onRefreshContext, router]);
-  const actions = useAssistantActions(pathname, refreshAfterCommit, cancelWork);
+  const handleCommittedAction = useCallback((proposal: PersistedProposal) => {
+    if (proposal.payload.kind !== "simulation" || proposal.payload.action !== "simulate_employer_exit_date") return;
+    expectedNavigation.current = "/employment";
+    router.push("/employment");
+  }, [router]);
+  const actions = useAssistantActions(pathname, refreshAfterCommit, cancelWork, handleCommittedAction);
   const handleVoiceResult = useCallback((result: ToolResult, current = false) => {
     actions.acceptResult(result, current);
     // Recovered proposals are only status hints. Restore the current proposal
@@ -549,7 +555,7 @@ export function AssistantPanel({
         <header className="assistant-workspace-header"><div><span className="utility-label">Masked demo context</span><h2>EPF Sahayak</h2></div><div className="assistant-workspace-controls"><button aria-label="Collapse EPF Sahayak" className="icon-action" disabled={voiceActive} onClick={closeAssistant} title={voiceActive ? "End voice mode before collapsing EPF Sahayak." : undefined} type="button"><PanelRightClose aria-hidden="true" size={19} /></button></div></header>
         <div className="assistant-context-strip"><span className="utility-label">Current page</span><strong>{pageName(pathname)}</strong><span className={contextStale ? "assistant-context-status is-stale" : "assistant-context-status"}>{contextStale ? "Context refresh failed; showing the last verified demo record." : "Masked context verified for this demo."}</span></div>
         <p className="assistant-boundary">Guidance only. Never enter real Aadhaar, UAN, PAN, bank, OTP, biometric, or government data.</p>
-        <div aria-label="EPF Sahayak workspace content" className="assistant-workspace-scroll" role="region">
+        <div aria-label="EPF Sahayak workspace content" className="assistant-workspace-scroll" data-voice-active={voiceActive} role="region">
         {!voiceActive && !textMode ? <section className="assistant-voice-welcome" aria-label="Start with voice">
           <span className="assistant-voice-recommend">Recommended · Voice guide</span>
           <div className="assistant-welcome-orb"><Mic size={30} aria-hidden="true" /></div>
@@ -577,7 +583,7 @@ export function AssistantPanel({
           {pending ? <div className="assistant-empty"><Sparkles aria-hidden="true" size={18} /> Checking the masked demo record…</div> : null}
         </div> : null}
         <AssistantActionProgress results={actions.progress} refreshStatus={actions.refreshStatus} />
-        {workspaceOpen && actions.proposal ? <PersistedActionReview key={actions.proposal.proposalId + ":" + actions.proposal.payloadHash} proposal={actions.proposal} busy={actions.busy} acknowledged={actions.acknowledged} onDisplayed={actions.markDisplayed} onDecision={actions.decide} /> : null}
+        {workspaceOpen && actions.proposal ? <PersistedActionReview key={actions.proposal.proposalId + ":" + actions.proposal.payloadHash} proposal={actions.proposal} busy={actions.busy} acknowledged={actions.acknowledged} compact={voiceActive && actions.proposal.payload.kind !== "onboarding"} onDisplayed={actions.markDisplayed} onDecision={actions.decide} /> : null}
         {actions.error ? <p className="assistant-error" role="alert">{actions.error}</p> : null}
         {panelError ? <p className="assistant-error" role="alert">{panelError}</p> : null}
         {documentOpen ? <section aria-label="Synthetic document review" className="document-assist" id="assistant-document-review"><header className="document-assist-header"><FileSearch aria-hidden="true" size={18} /><span><strong>Review a synthetic document</strong><small>Produces proposals only</small></span><button className="text-action" onClick={cancelDocumentReview} type="button">Cancel review</button></header><form onSubmit={extractDocument}>

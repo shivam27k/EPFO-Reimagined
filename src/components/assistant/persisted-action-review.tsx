@@ -5,8 +5,21 @@ import type { ToolResult } from "@/domain/assistant-tools";
 import { processDefinitions } from "@/domain/process-definitions";
 import { FormPatchReview } from "./form-patch-review";
 
-export function PersistedActionReview({ proposal, busy, acknowledged, onDisplayed, onDecision }: {
+const proposalLabels: Record<string, string> = {
+  employmentId: "Employment record",
+  exitDate: "Exit date",
+  wageMonth: "Wage month",
+};
+
+function displayProposalValue(key: string, value: unknown) {
+  if (key.endsWith("Id") && typeof value === "string" && value.length > 12) return `Record …${value.slice(-8)}`;
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return String(value);
+}
+
+export function PersistedActionReview({ proposal, busy, acknowledged, compact = false, onDisplayed, onDecision }: {
   proposal: PersistedProposal; busy: boolean; acknowledged: string;
+  compact?: boolean;
   onDisplayed: (proposal: PersistedProposal) => Promise<void>;
   onDecision: (decision: "confirm" | "cancel") => void;
 }) {
@@ -36,7 +49,7 @@ export function PersistedActionReview({ proposal, busy, acknowledged, onDisplaye
   }, [acknowledged, identity, onDisplayed, proposal]);
   const disabled = busy || expired || proposal.status !== "pending" || acknowledged !== identity;
   const payload = proposal.payload;
-  return <div className="assistant-action-card" ref={ref}>
+  return <div className={`assistant-action-card${compact ? " assistant-action-card-compact" : ""}`} ref={ref}>
     <p>{proposal.message}</p>
     {payload.kind === "onboarding" ? <FormPatchReview
       proposals={payload.fields.map((field) => {
@@ -48,9 +61,9 @@ export function PersistedActionReview({ proposal, busy, acknowledged, onDisplaye
       })}
       scope="WHOLE_FORM" pending={busy} disabled={disabled}
       onConfirm={() => onDecision("confirm")} onCancel={() => onDecision("cancel")} />
-      : <><strong>{payload.action.replaceAll("_", " ")}</strong>
-        <dl>{Object.entries(payload).filter(([key, value]) => key !== "kind" && key !== "action" && value !== null)
-          .map(([key, value]) => <div key={key}><dt>{key}</dt><dd style={{ overflowWrap: "anywhere" }}>{String(value)}</dd></div>)}</dl>
+      : <><strong>{payload.action === "simulate_employer_exit_date" ? "Record fictional employer exit date" : payload.action.replaceAll("_", " ")}</strong>
+        <dl>{Object.entries(payload).filter(([key, value]) => !["kind", "action", "synthetic"].includes(key) && value !== null)
+          .map(([key, value]) => <div key={key}><dt>{proposalLabels[key] ?? key.replaceAll(/([A-Z])/g, " $1")}</dt><dd>{displayProposalValue(key, value)}</dd></div>)}</dl>
         <p>Synthetic demo change only. Nothing changes until a subsequent confirmation.</p>
         <div><button className="primary-action" disabled={disabled} onClick={() => onDecision("confirm")} type="button">Confirm action</button>
           <button className="secondary-action" disabled={disabled} onClick={() => onDecision("cancel")} type="button">Cancel</button></div></>}

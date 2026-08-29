@@ -13,7 +13,12 @@ export function rememberCall(callId: string) {
     sessionStorage.setItem(CALLS_KEY, JSON.stringify([...new Set([...previous, callId])].slice(-16)));
   } catch { /* Recovery IDs are optional local hints, never authorization. */ }
 }
-export function useAssistantActions(route: string, onRefresh: () => Promise<boolean>, onDecisionStart: () => void) {
+export function useAssistantActions(
+  route: string,
+  onRefresh: () => Promise<boolean>,
+  onDecisionStart: () => void,
+  onCommitted?: (proposal: PersistedProposal, result: ToolResult) => void,
+) {
   const [proposal, setProposal] = useState<PersistedProposal | null>(null);
   const [progress, setProgress] = useState<ToolResult[]>([]);
   const [busy, setBusy] = useState(false);
@@ -22,9 +27,11 @@ export function useAssistantActions(route: string, onRefresh: () => Promise<bool
   const [refreshStatus, setRefreshStatus] = useState("");
   const receipts = useRef(new Set<string>());
   const refreshRef = useRef(onRefresh);
+  const committedRef = useRef(onCommitted);
   const proposalRevision = useRef(0);
   const decisionRef = useRef<{ proposalId: string; decision: string; requestKey: string; callId: string } | null>(null);
   useEffect(() => { refreshRef.current = onRefresh; }, [onRefresh]);
+  useEffect(() => { committedRef.current = onCommitted; }, [onCommitted]);
   const acceptResult = useCallback((result: ToolResult, applyCurrentReadback = false) => {
     rememberCall(result.callId);
     setProgress((current) => [...current.filter((item) => item.callId !== result.callId), result].slice(-8));
@@ -105,6 +112,9 @@ export function useAssistantActions(route: string, onRefresh: () => Promise<bool
       const result = toolResultSchema.parse(response.result);
       acceptResult(result, true);
       if (result.status !== "completed" && result.status !== "cancelled") setError(result.message);
+      if (decision === "confirm" && result.status === "completed" && result.data?.recordOutcome === "committed") {
+        committedRef.current?.(exact, result);
+      }
       await reload();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Decision outcome is uncertain; do not repeat the change.");
