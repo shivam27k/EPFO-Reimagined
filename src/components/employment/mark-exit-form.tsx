@@ -46,7 +46,11 @@ export function MarkExitForm({ employments }: { employments: EmploymentOption[] 
 
   function loadValidDemoExit() {
     const month = selected?.latestContributionMonth;
-    if (!month) return;
+    if (!month) {
+      setMessageIsError(true);
+      setMessage("No contribution month exists yet. Open Contributions and let the six-month fictional timeline finish, then return here.");
+      return;
+    }
     const [year, monthNumber] = month.split("-").map(Number);
     const value = new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
     setExitDate(value);

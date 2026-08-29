@@ -2,7 +2,7 @@ import { CheckCircle2 } from "lucide-react";
 import Link from "next/link";
 
 import { ContributionTable } from "@/components/passbook/contribution-table";
-import { TimeAdvanceAction } from "@/components/passbook/time-advance-action";
+import { AutomaticContributionTimeline } from "@/components/passbook/automatic-contribution-timeline";
 import {
   CompactFacts,
   DetailDisclosure,
@@ -22,7 +22,7 @@ function formatRupees(amountInPaise: number) {
 }
 
 export default async function PassbookPage(
-  { searchParams = Promise.resolve({}) }: { searchParams?: Promise<{ onboarding?: string }> } = {},
+  { searchParams = Promise.resolve({}) }: { searchParams?: Promise<{ onboarding?: string; timeline?: string }> } = {},
 ) {
   const current = await requireCurrentRun();
   const [snapshot, params] = await Promise.all([
@@ -43,13 +43,14 @@ export default async function PassbookPage(
 
   return (
     <div className="task-first-stack passbook-page">
-      {params.onboarding === "complete" ? (
+      {canSimulateMonths && snapshot.contributions.length === 0 ? <AutomaticContributionTimeline /> : null}
+      {params.onboarding === "complete" || params.timeline === "complete" ? (
         <section className="flow-complete-banner" role="status" aria-labelledby="onboarding-complete-heading">
           <CheckCircle2 aria-hidden="true" size={25} />
           <div>
-            <p className="utility-label">Onboarding complete</p>
-            <h2 id="onboarding-complete-heading">Your demo member profile is ready</h2>
-            <p>Identity, first employment and simulated KYC records were saved. The next step is to create fictional contribution history below.</p>
+            <p className="utility-label">{params.timeline === "complete" ? "Timeline simulated" : "Onboarding complete"}</p>
+            <h2 id="onboarding-complete-heading">{params.timeline === "complete" ? "Six contribution months are now in your passbook" : "Your demo member profile is ready"}</h2>
+            <p>{params.timeline === "complete" ? "The fictional member, employer EPF and employer EPS entries below cover August 2026 through January 2027." : "Identity, first employment and simulated KYC records were saved. The contribution timeline is being created automatically."}</p>
           </div>
         </section>
       ) : null}
@@ -76,7 +77,7 @@ export default async function PassbookPage(
           owner={canSimulateMonths || snapshot.persona === "NEW_MEMBER" ? "You" : "Employer payroll / ECR"}
           tone="active"
           action={canSimulateMonths
-            ? <TimeAdvanceAction variant="primary" />
+            ? null
             : snapshot.persona === "NEW_MEMBER"
               ? <Link className="primary-action" href="/onboarding">Complete member setup</Link>
               : <Link className="primary-action" href="/claims">Review claim readiness</Link>}
