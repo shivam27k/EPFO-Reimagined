@@ -32,7 +32,7 @@ export function useAssistantActions(
   const decisionRef = useRef<{ proposalId: string; decision: string; requestKey: string; callId: string } | null>(null);
   useEffect(() => { refreshRef.current = onRefresh; }, [onRefresh]);
   useEffect(() => { committedRef.current = onCommitted; }, [onCommitted]);
-  const acceptResult = useCallback((result: ToolResult, applyCurrentReadback = false) => {
+  const acceptResult = useCallback((result: ToolResult, applyCurrentReadback = false, refreshCommitted = true) => {
     rememberCall(result.callId);
     setProgress((current) => [...current.filter((item) => item.callId !== result.callId), result].slice(-8));
     const parsed = persistedProposalSchema.safeParse(result.data?.proposal);
@@ -51,11 +51,15 @@ export function useAssistantActions(
             detail: { values, maskedValues, receiptId },
           }));
         }
-        setRefreshStatus("Server write committed; refreshing the browser separately…");
-        void refreshRef.current().then((observed) => setRefreshStatus(observed
-          ? "Server receipt retained. Fresh member context fetched; route render is not verified."
-          : "Server receipt retained. Browser refresh was not verified; refresh the page when ready."))
-          .catch(() => setRefreshStatus("Server receipt retained. Browser refresh failed."));
+        if (refreshCommitted) {
+          setRefreshStatus("Server write committed; refreshing the browser separately…");
+          void refreshRef.current().then((observed) => setRefreshStatus(observed
+            ? "Server receipt retained. Fresh member context fetched; route render is not verified."
+            : "Server receipt retained. Browser refresh was not verified; refresh the page when ready."))
+            .catch(() => setRefreshStatus("Server receipt retained. Browser refresh failed."));
+        } else {
+          setRefreshStatus("");
+        }
       }
     }
     if (result.status === "cancelled") setProposal((current) => current?.proposalId === result.data?.proposalId ? null : current);
@@ -110,8 +114,17 @@ export function useAssistantActions(
         ...event, kind: "decision", route, payloadHash: exact.payloadHash,
       });
       const result = toolResultSchema.parse(response.result);
-      acceptResult(result, true);
+      const redirectsAfterCommit = decision === "confirm"
+        && result.status === "completed"
+        && result.data?.recordOutcome === "committed"
+        && exact.payload.kind === "simulation"
+        && exact.payload.action === "simulate_employer_exit_date";
+      acceptResult(result, true, !redirectsAfterCommit);
       if (result.status !== "completed" && result.status !== "cancelled") setError(result.message);
+      if (redirectsAfterCommit) {
+        committedRef.current?.(exact, result);
+        return;
+      }
       if (decision === "confirm" && result.status === "completed" && result.data?.recordOutcome === "committed") {
         committedRef.current?.(exact, result);
       }
